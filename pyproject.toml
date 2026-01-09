@@ -1,0 +1,103 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "datasimulator"
+version = "0.1.0"
+description = "Generate high-quality post-training datasets (SFT, DPO, PPO, GRPO) from documents and natural language"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Grant", email = "grant@example.com"}
+]
+keywords = ["llm", "training-data", "sft", "dpo", "ppo", "grpo", "synthetic-data"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "anthropic>=0.18.0",
+    "openai>=1.0.0",
+    "ollama>=0.1.0",
+    "aiohttp>=3.9.0",
+    "rich>=13.0.0",
+    "click>=8.1.0",
+    "pandas>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+]
+
+docs = [
+    "PyPDF2>=3.0.0",
+    "pdfplumber>=0.10.0",
+    "python-docx>=1.0.0",
+]
+
+web = [
+    "beautifulsoup4>=4.12.0",
+    "requests>=2.31.0",
+]
+
+quality = [
+    "sentence-transformers>=2.2.0",
+    "scikit-learn>=1.3.0",
+    "numpy>=1.24.0",
+]
+
+all = [
+    "datasimulator[dev,docs,web,quality]"
+]
+
+[project.urls]
+Homepage = "https://github.com/grantgriff/datasimulator"
+Repository = "https://github.com/grantgriff/datasimulator"
+Issues = "https://github.com/grantgriff/datasimulator/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["datasimulator*"]
+exclude = ["tests*", "examples*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312']
+include = '\.pyi?$'
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
