@@ -18,6 +18,10 @@ from .core.data_models import (
 )
 from .core.models.llm_client import ModelRouter
 from .core.generators.sft_generator import SFTGenerator
+from .core.generators.dpo_generator import DPOGenerator
+from .core.generators.ppo_generator import PPOGenerator
+from .core.generators.grpo_generator import GRPOGenerator
+from .core.generators.rl_verifiable_generator import RLVerifiableGenerator
 from .utils.cost_tracker import CostTracker
 from .sources.document_loader import DocumentLoader, load_document
 from .sources.base_loader import LoaderException
@@ -358,11 +362,44 @@ class DataSimulator:
                 config=config,
                 source_content=self.source_content
             )
+        elif self.data_type == "dpo":
+            generator = DPOGenerator(
+                format_type="preference",  # Default to preference format
+                preference_strategy="quality",  # Default to quality-based preferences
+                model_router=self.model_router,
+                cost_tracker=self.cost_tracker,
+                config=config,
+                source_content=self.source_content
+            )
+        elif self.data_type == "ppo":
+            generator = PPOGenerator(
+                prompt_style="open_ended",  # Default to open-ended prompts
+                model_router=self.model_router,
+                cost_tracker=self.cost_tracker,
+                config=config,
+                source_content=self.source_content
+            )
+        elif self.data_type == "grpo":
+            generator = GRPOGenerator(
+                num_completions=4,  # Default to 4 completions per prompt
+                task_type="verifiable",  # Default to verifiable tasks
+                model_router=self.model_router,
+                cost_tracker=self.cost_tracker,
+                config=config,
+                source_content=self.source_content
+            )
+        elif self.data_type == "rl_verifiable":
+            generator = RLVerifiableGenerator(
+                verification_type="exact_match",  # Default verification type
+                model_router=self.model_router,
+                cost_tracker=self.cost_tracker,
+                config=config,
+                source_content=self.source_content
+            )
         else:
-            # TODO: Implement other generators in later phases
-            raise NotImplementedError(
-                f"Generator for {self.data_type} not yet implemented. "
-                "Currently only 'sft' is supported."
+            raise ValueError(
+                f"Unknown data type: {self.data_type}. "
+                f"Supported types: sft, dpo, ppo, grpo, rl_verifiable"
             )
 
         # Generate samples (using asyncio)
