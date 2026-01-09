@@ -19,6 +19,8 @@ from .core.data_models import (
 from .core.models.llm_client import ModelRouter
 from .core.generators.sft_generator import SFTGenerator
 from .utils.cost_tracker import CostTracker
+from .sources.document_loader import DocumentLoader, load_document
+from .sources.base_loader import LoaderException
 
 logging.basicConfig(
     level=logging.INFO,
@@ -280,27 +282,41 @@ class DataSimulator:
         """
         Load source content from file or URL.
 
-        Currently supports basic text file loading.
-        TODO: Add PDF, Word, image, and URL support in Phase 2.
+        Supports:
+        - Plain text files (.txt, .md)
+        - PDF files (.pdf)
+        - Word documents (.docx)
+        - Images (.jpg, .png, etc.) via OCR
+        - Web pages (http://, https://)
+        - Google Docs (URLs or IDs)
         """
         if not self.source:
             return ""
 
-        source_path = Path(self.source)
-
         try:
-            if source_path.exists() and source_path.is_file():
-                logger.info(f"Loading source from {source_path}")
-                with open(source_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                logger.info(f"Loaded {len(content)} characters from source")
-                return content
-            else:
-                logger.warning(f"Source file not found: {source_path}")
-                return ""
+            logger.info(f"Loading source: {self.source}")
 
-        except Exception as e:
+            # Use unified document loader
+            loader = DocumentLoader(self.source)
+            content = loader.load()
+
+            # Get metadata
+            metadata = loader.get_metadata()
+            logger.info(
+                f"Loaded {len(content)} characters from {self.source} "
+                f"(type: {metadata.get('method', 'unknown')})"
+            )
+
+            return content
+
+        except LoaderException as e:
             logger.error(f"Error loading source: {e}")
+            # Don't fail - just return empty string and continue
+            logger.warning("Continuing without source content")
+            return ""
+        except Exception as e:
+            logger.error(f"Unexpected error loading source: {e}")
+            logger.warning("Continuing without source content")
             return ""
 
     def generate(

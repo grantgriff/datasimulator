@@ -14,6 +14,8 @@ DataSimulator is an autonomous SDK that creates synthetic training data for SFT,
 - **Cost Controls**: Automatic stop at $20 with user prompts to continue
 - **Batch Processing**: Generate 20+ rows per API call for efficiency
 - **Multi-Model Support**: Use Claude, GPT-4, or local models (Ollama, Qwen)
+- **Universal Document Loading**: 📄 PDFs, Word docs, images (OCR), web pages, Google Docs
+- **Automatic Format Detection**: Smart loader selection based on file type or URL
 - **Iterative Refinement**: Automatically regenerate low-quality samples
 - **Domain Adaptation**: Extract patterns from source material
 - **Rich Analytics**: Real-time dashboards and quality metrics
@@ -52,9 +54,9 @@ echo "OPENAI_API_KEY=your_key_here" >> .env
 ```python
 from datasimulator import DataSimulator
 
-# Initialize with source document
+# Initialize with source document (supports PDF, Word, images, URLs, Google Docs)
 sdk = DataSimulator(
-    source="accounting_textbook.pdf",
+    source="accounting_textbook.pdf",  # or .docx, .jpg, https://..., etc.
     data_type="sft",
     models={
         "generator": "claude-3-5-sonnet-20241022",
@@ -168,15 +170,40 @@ high_quality = dataset.filter_by_quality(min_score=8.0)
 high_quality.save("high_quality_data.jsonl")
 ```
 
-### Load from Text File
+### Load from Different Document Types
 
 ```python
+# PDF document
+sdk = DataSimulator(source="guide.pdf", data_type="sft")
+
+# Word document
+sdk = DataSimulator(source="manual.docx", data_type="sft")
+
+# Web page
+sdk = DataSimulator(source="https://example.com/docs", data_type="sft")
+
+# Image (OCR)
+sdk = DataSimulator(source="scanned_doc.jpg", data_type="sft")
+
+# Google Docs
 sdk = DataSimulator(
-    source="domain_knowledge.txt",
+    source="https://docs.google.com/document/d/DOC_ID/edit",
     data_type="sft"
 )
 
-dataset = sdk.generate(num_samples=500)
+# Text file
+sdk = DataSimulator(source="notes.txt", data_type="sft")
+```
+
+### Standalone Document Loading
+
+```python
+from datasimulator import load_document
+
+# Quick content extraction
+text = load_document("document.pdf")
+text = load_document("https://example.com")
+text = load_document("image.jpg", language='eng')  # OCR
 ```
 
 ### Generate Without Source (Use Domain Context)
@@ -260,6 +287,16 @@ datasimulator/
 │   │   └── llm_client.py    # Multi-provider LLM client
 │   └── data_models.py       # Pydantic schemas
 │
+├── sources/                 # Document loaders ✅
+│   ├── base_loader.py       # Base loader class
+│   ├── document_loader.py   # Unified loader
+│   └── loaders/
+│       ├── pdf_loader.py
+│       ├── word_loader.py
+│       ├── image_loader.py
+│       ├── web_scraper.py
+│       └── google_docs_loader.py
+│
 ├── utils/
 │   └── cost_tracker.py      # Cost tracking & limits
 │
@@ -280,12 +317,14 @@ datasimulator/
 - [x] SFT generator with batch processing
 - [x] Main SDK interface
 
-### 🚧 Phase 2: Source Loading (Next)
-- [ ] PDF loader (PyPDF2, pdfplumber)
-- [ ] Word document loader
-- [ ] Google Docs integration
-- [ ] Image OCR (JPEG, PNG)
-- [ ] Web scraping (URLs)
+### ✅ Phase 2: Source Loading (Complete)
+- [x] PDF loader (PyPDF2, pdfplumber)
+- [x] Word document loader (.docx)
+- [x] Google Docs integration
+- [x] Image OCR (JPEG, PNG, TIFF)
+- [x] Web scraping (BeautifulSoup + Playwright)
+- [x] Automatic format detection
+- [x] Unified DocumentLoader API
 
 ### 📋 Phase 3: Quality & Refinement
 - [ ] Advanced quality scoring
@@ -360,10 +399,19 @@ sdk = DataSimulator(
 
 See the `examples/` directory for complete examples:
 
-- `examples/accounting_sft.py` - Generate accounting training data
-- `examples/finance_dpo.py` - Generate preference pairs for finance
-- `examples/programming_rl.py` - Generate verifiable programming problems
-- `examples/custom_domain.py` - Use custom domain knowledge
+**Phase 1 (Core):**
+- `examples/basic_sft_example.py` - Basic SFT generation
+- `examples/with_source_document.py` - Generate from text files
+
+**Phase 2 (Document Loaders):**
+- `examples/pdf_loader_example.py` - Generate from PDF documents
+- `examples/web_scraping_example.py` - Generate from web pages
+- `examples/multiple_sources_example.py` - Combine multiple sources
+
+Run any example:
+```bash
+python examples/pdf_loader_example.py
+```
 
 ---
 

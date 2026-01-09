@@ -14,10 +14,13 @@ from .core.data_models import (
     GRPOPrompt,
     RLVerifiable,
 )
+from .sources.document_loader import DocumentLoader, load_document
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "DataSimulator",
+    "DocumentLoader",
+    "load_document",
     "SFTMessages",
     "SFTCompletion",
     "DPOPreference",
