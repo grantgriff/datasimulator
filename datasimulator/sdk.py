@@ -19,9 +19,7 @@ from .core.data_models import (
 from .core.models.llm_client import ModelRouter
 from .core.generators.sft_generator import SFTGenerator
 from .core.generators.dpo_generator import DPOGenerator
-from .core.generators.ppo_generator import PPOGenerator
-from .core.generators.grpo_generator import GRPOGenerator
-from .core.generators.rl_verifiable_generator import RLVerifiableGenerator
+from .core.generators.verifiable_qa_generator import VerifiableQAGenerator
 from .utils.cost_tracker import CostTracker
 from .sources.document_loader import DocumentLoader, load_document
 from .sources.base_loader import LoaderException
@@ -224,7 +222,7 @@ class DataSimulator:
     def __init__(
         self,
         source: Optional[Union[str, List[str]]] = None,
-        data_type: Literal["sft", "dpo", "ppo", "grpo", "rl_verifiable"] = "sft",
+        data_type: Literal["sft", "dpo", "verifiable_qa"] = "sft",
         models: Optional[Dict[str, str]] = None,
         quality_threshold: float = 6.0,
         diversity_threshold: float = 0.85,
@@ -232,7 +230,9 @@ class DataSimulator:
         batch_size: int = 20,
         interactive: bool = True,
         checkpoint_dir: Optional[str] = None,
-        checkpoint_interval: int = 100,
+        checkpoint_interval: int = 20,
+        enable_planning: bool = False,
+        google_api_key: Optional[str] = None,
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
     ):
@@ -252,7 +252,9 @@ class DataSimulator:
             batch_size: Number of samples per API call
             interactive: Whether to prompt user when cost limit is reached (False for autonomous)
             checkpoint_dir: Directory to save checkpoints (optional)
-            checkpoint_interval: Save checkpoint every N samples
+            checkpoint_interval: Save checkpoint every N samples (default: 20)
+            enable_planning: Use Gemini to analyze sources and create generation plan
+            google_api_key: Google API key for Gemini planning (or use GOOGLE_API_KEY env)
             anthropic_api_key: Anthropic API key (or use ANTHROPIC_API_KEY env)
             openai_api_key: OpenAI API key (or use OPENAI_API_KEY env)
         """
@@ -287,6 +289,19 @@ class DataSimulator:
         self.cost_tracker = CostTracker(max_cost=max_cost, interactive=interactive)
         if not interactive:
             logger.info(f"Non-interactive mode: will not prompt when cost limit reached")
+
+        # Setup planning (optional Gemini integration)
+        self.enable_planning = enable_planning
+        self.planner = None
+        if enable_planning:
+            try:
+                from .planning import GeminiPlanner
+                self.planner = GeminiPlanner(api_key=google_api_key)
+                logger.info("Gemini planning enabled")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Gemini planner: {e}")
+                logger.warning("Continuing without planning layer")
+                self.enable_planning = False
 
         # Store configuration
         self.quality_threshold = quality_threshold
@@ -409,25 +424,8 @@ class DataSimulator:
                 config=config,
                 source_content=self.source_content
             )
-        elif self.data_type == "ppo":
-            generator = PPOGenerator(
-                prompt_style="open_ended",  # Default to open-ended prompts
-                model_router=self.model_router,
-                cost_tracker=self.cost_tracker,
-                config=config,
-                source_content=self.source_content
-            )
-        elif self.data_type == "grpo":
-            generator = GRPOGenerator(
-                num_completions=4,  # Default to 4 completions per prompt
-                task_type="verifiable",  # Default to verifiable tasks
-                model_router=self.model_router,
-                cost_tracker=self.cost_tracker,
-                config=config,
-                source_content=self.source_content
-            )
-        elif self.data_type == "rl_verifiable":
-            generator = RLVerifiableGenerator(
+        elif self.data_type == "verifiable_qa":
+            generator = VerifiableQAGenerator(
                 verification_type="exact_match",  # Default verification type
                 model_router=self.model_router,
                 cost_tracker=self.cost_tracker,
@@ -437,7 +435,7 @@ class DataSimulator:
         else:
             raise ValueError(
                 f"Unknown data type: {self.data_type}. "
-                f"Supported types: sft, dpo, ppo, grpo, rl_verifiable"
+                f"Supported types: sft, dpo, verifiable_qa"
             )
 
         # Generate samples (using asyncio) with checkpointing

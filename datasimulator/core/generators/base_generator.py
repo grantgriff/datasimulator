@@ -38,7 +38,9 @@ class BaseGenerator(ABC):
         model_router: ModelRouter,
         cost_tracker: CostTracker,
         config: GenerationConfig,
-        source_content: Optional[str] = None
+        source_content: Optional[str] = None,
+        max_retries: int = 10,
+        quality_check_batch_size: int = 50
     ):
         """
         Initialize generator.
@@ -48,15 +50,20 @@ class BaseGenerator(ABC):
             cost_tracker: Cost tracking system
             config: Generation configuration
             source_content: Source material for generation context
+            max_retries: Maximum retry attempts for failed samples
+            quality_check_batch_size: Number of samples to check per API call
         """
         self.model_router = model_router
         self.cost_tracker = cost_tracker
         self.config = config
         self.source_content = source_content or ""
+        self.max_retries = max_retries
+        self.quality_check_batch_size = quality_check_batch_size
 
         self.generated_samples = []
         self.failed_samples = []
         self.total_regenerations = 0
+        self.retry_count = 0
 
     @property
     @abstractmethod
@@ -154,6 +161,81 @@ No explanation needed, just the number.
             # Default to below threshold to trigger regeneration
             return 5.0
 
+    async def _score_quality_batch(self, samples: List[Dict[str, Any]]) -> List[float]:
+        """
+        Score multiple samples in a single API call (batched quality checking).
+
+        Args:
+            samples: List of samples to score
+
+        Returns:
+            List of quality scores (1.0-10.0) for each sample
+        """
+        if not samples:
+            return []
+
+        # Create batched scoring prompt
+        samples_text = "\n\n".join([
+            f"=== SAMPLE {i+1} ===\n{json.dumps(sample, indent=2)}"
+            for i, sample in enumerate(samples)
+        ])
+
+        scoring_prompt = f"""
+Score each of the following {len(samples)} training data samples from 1-10 based on:
+1. Relevance to source material
+2. Accuracy and correctness
+3. Clarity and completeness
+4. Instruction-following quality
+5. Appropriate difficulty level
+
+Source Context:
+{self.source_content[:1000] if self.source_content else "No source context provided"}
+
+Data Type: {self.data_type_name.upper()}
+
+SAMPLES TO SCORE:
+{samples_text}
+
+Provide ONLY the scores as a JSON array of numbers, nothing else.
+Example: [7.5, 8.2, 6.3, 9.0, ...]
+
+Output (JSON array only):
+"""
+
+        try:
+            response = await self.model_router.verify(
+                scoring_prompt,
+                temperature=0.3,
+                max_tokens=500
+            )
+
+            # Extract JSON array
+            response_clean = response.strip()
+            if "```json" in response_clean:
+                response_clean = response_clean.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_clean:
+                response_clean = response_clean.split("```")[1].split("```")[0].strip()
+
+            scores = json.loads(response_clean)
+
+            # Validate and clamp scores
+            if not isinstance(scores, list) or len(scores) != len(samples):
+                logger.warning(f"Batch scoring returned {len(scores)} scores for {len(samples)} samples")
+                # Fall back to default scores
+                return [5.0] * len(samples)
+
+            # Clamp each score to 1-10 range
+            scores = [max(1.0, min(10.0, float(s))) for s in scores]
+
+            logger.debug(f"Batch quality scores: {scores}")
+            return scores
+
+        except Exception as e:
+            logger.error(f"Error in batch scoring: {e}")
+            logger.warning("Falling back to individual scoring")
+            # Fall back to individual scoring
+            return [await self._score_quality(sample) for sample in samples]
+
     async def generate(
         self,
         num_samples: int,
@@ -211,44 +293,58 @@ No explanation needed, just the number.
                 if show_progress:
                     print(f"✓ Generated (${last_cost:.3f})")
 
-                # Validate and score each sample
-                batch_samples = []
+                # Validate all samples first
+                valid_samples = []
+                valid_indices = []
                 for i, raw_sample in enumerate(raw_samples):
-                    if show_progress:
-                        print(f"  └─ Sample {i+1}/{len(raw_samples)}: ", end="", flush=True)
-
-                    # Validate format
-                    if not self._validate_sample(raw_sample):
+                    if self._validate_sample(raw_sample):
+                        valid_samples.append(raw_sample)
+                        valid_indices.append(i)
+                    else:
                         logger.warning(f"Sample {i} failed validation")
                         self.failed_samples.append({
                             "sample": raw_sample,
                             "reason": "validation_failed"
                         })
-                        if show_progress:
-                            print("❌ Invalid format")
-                        continue
 
-                    # Score quality
-                    quality_score = await self._score_quality(raw_sample)
+                if show_progress:
+                    print(f"  └─ Validated: {len(valid_samples)}/{len(raw_samples)} samples passed")
+
+                # Batch quality scoring (process in chunks)
+                all_quality_scores = []
+                for chunk_start in range(0, len(valid_samples), self.quality_check_batch_size):
+                    chunk_end = min(chunk_start + self.quality_check_batch_size, len(valid_samples))
+                    chunk = valid_samples[chunk_start:chunk_end]
+
+                    if show_progress:
+                        print(f"  └─ Quality check: batch {chunk_start//self.quality_check_batch_size + 1} ({len(chunk)} samples)...", end="", flush=True)
+
+                    # Score batch
+                    chunk_scores = await self._score_quality_batch(chunk)
+                    all_quality_scores.extend(chunk_scores)
 
                     # Track verification cost
                     verify_cost = self.model_router.get_total_cost() - self.cost_tracker.total_cost
                     if not self.cost_tracker.add_cost(verify_cost, operation="verification"):
                         break
 
+                    if show_progress:
+                        avg_score = sum(chunk_scores) / len(chunk_scores) if chunk_scores else 0
+                        print(f" ✓ Avg: {avg_score:.1f}/10")
+
+                # Create dataset samples from quality-passing samples
+                batch_samples = []
+                for i, (raw_sample, quality_score) in enumerate(zip(valid_samples, all_quality_scores)):
                     # Check if meets quality threshold
                     if quality_score < self.config.quality_threshold:
                         logger.info(
-                            f"Sample {i} below quality threshold: "
-                            f"{quality_score:.1f} < {self.config.quality_threshold}"
+                            f"Sample below quality threshold: {quality_score:.1f} < {self.config.quality_threshold}"
                         )
                         self.failed_samples.append({
                             "sample": raw_sample,
                             "reason": "low_quality",
                             "score": quality_score
                         })
-                        if show_progress:
-                            print(f"❌ Low quality ({quality_score:.1f}/10)")
                         continue
 
                     # Create dataset sample with metrics
@@ -269,13 +365,9 @@ No explanation needed, just the number.
                         )
 
                         batch_samples.append(dataset_sample)
-                        if show_progress:
-                            print(f"✓ Quality: {quality_score:.1f}/10")
 
                     except Exception as e:
                         logger.error(f"Error creating dataset sample: {e}")
-                        if show_progress:
-                            print(f"❌ Error: {e}")
 
                 # Add successful samples
                 self.generated_samples.extend(batch_samples)
@@ -300,9 +392,16 @@ No explanation needed, just the number.
                 # Handle failed samples (regenerate if needed)
                 failed_in_batch = batch_size - len(batch_samples)
                 if failed_in_batch > 0 and self.cost_tracker.can_continue():
-                    logger.info(f"Regenerating {failed_in_batch} failed samples")
+                    self.retry_count += 1
+                    if self.retry_count >= self.max_retries:
+                        logger.warning(f"Max retry limit reached ({self.max_retries}), stopping regeneration")
+                        break
+                    logger.info(f"Regenerating {failed_in_batch} failed samples (retry {self.retry_count}/{self.max_retries})")
                     # Don't increment samples_generated yet - will retry
                     continue
+                else:
+                    # Reset retry count on successful batch
+                    self.retry_count = 0
 
             except Exception as e:
                 logger.error(f"Error generating batch: {e}")
