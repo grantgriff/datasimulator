@@ -157,7 +157,9 @@ No explanation needed, just the number.
     async def generate(
         self,
         num_samples: int,
-        show_progress: bool = True
+        show_progress: bool = True,
+        checkpoint_dir: Optional[Any] = None,
+        checkpoint_interval: int = 100
     ) -> List[DatasetSample]:
         """
         Generate dataset samples with quality checking and refinement.
@@ -165,6 +167,8 @@ No explanation needed, just the number.
         Args:
             num_samples: Number of samples to generate
             show_progress: Whether to show progress information
+            checkpoint_dir: Directory to save checkpoints (Path object or None)
+            checkpoint_interval: Save checkpoint every N samples
 
         Returns:
             List of validated, high-quality samples
@@ -175,7 +179,10 @@ No explanation needed, just the number.
         if show_progress:
             print(f"\n🚀 Starting generation of {num_samples} {self.data_type_name.upper()} samples")
             print(f"📊 Quality threshold: {self.config.quality_threshold}/10")
-            print(f"💰 Cost limit: ${self.config.max_cost:.2f}\n")
+            print(f"💰 Cost limit: ${self.config.max_cost:.2f}")
+            if checkpoint_dir:
+                print(f"💾 Checkpointing enabled: every {checkpoint_interval} samples")
+            print()
 
         while samples_generated < num_samples:
             if not self.cost_tracker.can_continue():
@@ -286,6 +293,10 @@ No explanation needed, just the number.
                         f"Cost: ${self.cost_tracker.total_cost:.2f}\n"
                     )
 
+                # Save checkpoint if needed
+                if checkpoint_dir and samples_generated % checkpoint_interval == 0:
+                    self._save_checkpoint(checkpoint_dir, samples_generated, show_progress)
+
                 # Handle failed samples (regenerate if needed)
                 failed_in_batch = batch_size - len(batch_samples)
                 if failed_in_batch > 0 and self.cost_tracker.can_continue():
@@ -303,6 +314,10 @@ No explanation needed, just the number.
                     logger.error("Too many failures, stopping generation")
                     break
 
+        # Save final checkpoint if checkpointing is enabled
+        if checkpoint_dir and samples_generated > 0:
+            self._save_checkpoint(checkpoint_dir, samples_generated, show_progress, final=True)
+
         if show_progress:
             print(f"\n{'='*60}")
             print(f"✅ Generation complete!")
@@ -312,6 +327,48 @@ No explanation needed, just the number.
             print(f"{'='*60}\n")
 
         return self.generated_samples[:num_samples]
+
+    def _save_checkpoint(self, checkpoint_dir, samples_count: int, show_progress: bool = True, final: bool = False):
+        """
+        Save checkpoint of generated samples.
+
+        Args:
+            checkpoint_dir: Directory to save checkpoints (Path object)
+            samples_count: Number of samples generated so far
+            show_progress: Whether to show progress messages
+            final: Whether this is the final checkpoint
+        """
+        try:
+            checkpoint_name = f"checkpoint_final.jsonl" if final else f"checkpoint_{samples_count}.jsonl"
+            checkpoint_path = checkpoint_dir / checkpoint_name
+
+            # Save samples in JSONL format
+            with open(checkpoint_path, 'w', encoding='utf-8') as f:
+                for sample in self.generated_samples[:samples_count]:
+                    data_dict = sample.data.model_dump()
+                    f.write(json.dumps(data_dict, ensure_ascii=False) + '\n')
+
+            # Also save metadata
+            metadata_path = checkpoint_dir / f"checkpoint_{samples_count}_meta.json"
+            metadata = {
+                "samples_count": samples_count,
+                "total_cost": self.cost_tracker.total_cost,
+                "failed_samples": len(self.failed_samples),
+                "data_type": self.data_type_name,
+                "timestamp": datetime.now().isoformat()
+            }
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2)
+
+            if show_progress:
+                checkpoint_label = "FINAL" if final else samples_count
+                logger.info(f"💾 Checkpoint saved: {checkpoint_path}")
+                print(f"   💾 Checkpoint saved: {checkpoint_label} samples -> {checkpoint_path}")
+
+        except Exception as e:
+            logger.error(f"Error saving checkpoint: {e}")
+            if show_progress:
+                print(f"   ⚠️  Warning: Failed to save checkpoint: {e}")
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get generation statistics."""
