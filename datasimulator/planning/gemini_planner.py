@@ -25,13 +25,19 @@ class GeminiPlanner:
     - Handles large documents with chunking failsafe
     """
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-1.5-pro-latest"):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gemini-1.5-pro-latest",
+        chunk_overlap: float = 0.1
+    ):
         """
         Initialize Gemini planner.
 
         Args:
             api_key: Google API key (or uses GOOGLE_API_KEY env var)
             model: Gemini model to use (pro for 1M+ token context)
+            chunk_overlap: Fraction of chunk to overlap with next (0.0-0.5, default 0.1 = 10%)
         """
         import os
 
@@ -54,8 +60,10 @@ class GeminiPlanner:
 
         # Gemini 1.5 Pro has ~2M token context, but leave buffer
         self.max_chars = 1_500_000  # ~375K tokens
+        self.chunk_overlap = max(0.0, min(0.5, chunk_overlap))  # Clamp to 0-50%
 
         logger.info(f"Gemini planner initialized with model: {model}")
+        logger.info(f"Chunk overlap: {self.chunk_overlap*100:.0f}%")
 
     def _chunk_content(self, content: str, max_chars: int) -> List[str]:
         """
@@ -81,13 +89,48 @@ class GeminiPlanner:
         for para in paragraphs:
             para_size = len(para)
 
-            if current_size + para_size > max_chars:
-                # Save current chunk
+            # Handle giant single paragraphs that exceed max_chars
+            if para_size > max_chars:
+                logger.warning(f"Paragraph exceeds {max_chars:,} chars ({para_size:,}), splitting into sentences")
+
+                # Save current chunk before handling giant paragraph
                 if current_chunk:
                     chunks.append("\n\n".join(current_chunk))
-                # Start new chunk
-                current_chunk = [para]
-                current_size = para_size
+                    current_chunk = []
+                    current_size = 0
+
+                # Split giant paragraph and pack sentences into chunks
+                sentence_chunks = self._split_giant_paragraph(para, max_chars)
+                chunks.extend(sentence_chunks)
+
+            elif current_size + para_size > max_chars:
+                # Save current chunk
+                if current_chunk:
+                    chunk_text = "\n\n".join(current_chunk)
+                    chunks.append(chunk_text)
+
+                    # Add overlap: keep last N% of current chunk for next chunk
+                    if self.chunk_overlap > 0:
+                        overlap_size = int(len(chunk_text) * self.chunk_overlap)
+                        overlap_text = chunk_text[-overlap_size:] if overlap_size > 0 else ""
+
+                        # Find paragraph boundary in overlap region
+                        # Try to start at a paragraph break for cleaner overlap
+                        last_para_break = overlap_text.find("\n\n")
+                        if last_para_break > 0:
+                            overlap_text = overlap_text[last_para_break + 2:]
+
+                        # Start new chunk with overlap + current paragraph
+                        current_chunk = [overlap_text, para] if overlap_text else [para]
+                        current_size = len(overlap_text) + para_size
+                    else:
+                        # No overlap - start fresh
+                        current_chunk = [para]
+                        current_size = para_size
+                else:
+                    # First chunk, no overlap possible
+                    current_chunk = [para]
+                    current_size = para_size
             else:
                 current_chunk.append(para)
                 current_size += para_size
@@ -96,7 +139,70 @@ class GeminiPlanner:
         if current_chunk:
             chunks.append("\n\n".join(current_chunk))
 
-        logger.info(f"Content split into {len(chunks)} chunks (max {max_chars:,} chars each)")
+        logger.info(f"Content split into {len(chunks)} chunks (max {max_chars:,} chars each, {self.chunk_overlap*100:.0f}% overlap)")
+        return chunks
+
+    def _split_giant_paragraph(self, paragraph: str, max_chars: int) -> List[str]:
+        """
+        Split a giant paragraph that exceeds max_chars.
+
+        Strategy:
+        1. Try splitting by sentences (on ". ", "! ", "? ")
+        2. Pack sentences into chunks of max_chars
+        3. If individual sentence still too big, hard-chunk it
+
+        Args:
+            paragraph: The oversized paragraph
+            max_chars: Maximum characters per chunk
+
+        Returns:
+            List of chunks from this paragraph
+        """
+        import re
+
+        # Split on sentence boundaries (. ! ?) but keep the punctuation
+        # This regex splits on sentence endings while preserving them
+        sentences = re.split(r'(?<=[.!?])\s+', paragraph)
+
+        chunks = []
+        current_chunk = []
+        current_size = 0
+
+        for sentence in sentences:
+            sentence_size = len(sentence)
+
+            # If single sentence exceeds limit, hard-chunk it
+            if sentence_size > max_chars:
+                logger.warning(f"Single sentence exceeds {max_chars:,} chars, hard-chunking")
+
+                # Save current accumulated sentences first
+                if current_chunk:
+                    chunks.append(" ".join(current_chunk))
+                    current_chunk = []
+                    current_size = 0
+
+                # Hard-chunk the giant sentence
+                for i in range(0, sentence_size, max_chars):
+                    chunk = sentence[i:i + max_chars]
+                    chunks.append(chunk)
+
+            elif current_size + sentence_size + 1 > max_chars:  # +1 for space
+                # Save current chunk
+                if current_chunk:
+                    chunks.append(" ".join(current_chunk))
+
+                # Start new chunk with this sentence
+                current_chunk = [sentence]
+                current_size = sentence_size
+            else:
+                current_chunk.append(sentence)
+                current_size += sentence_size + 1  # +1 for space
+
+        # Add final chunk
+        if current_chunk:
+            chunks.append(" ".join(current_chunk))
+
+        logger.info(f"Giant paragraph split into {len(chunks)} sentence-based chunks")
         return chunks
 
     async def create_generation_plan(
@@ -225,23 +331,48 @@ Provide ONLY the JSON output, nothing else.
         Create plan for large documents using chunked analysis.
 
         Strategy:
-        1. Summarize each chunk
+        1. Summarize each chunk in parallel
         2. Combine summaries
         3. Create plan from combined summaries
         """
         logger.info("Using chunked analysis strategy for large documents")
 
         chunks = self._chunk_content(source_content, self.max_chars)
-        summaries = []
 
-        # Summarize each chunk
-        for i, chunk in enumerate(chunks, 1):
-            logger.info(f"Summarizing chunk {i}/{len(chunks)}")
+        # Summarize all chunks in parallel
+        logger.info(f"Summarizing {len(chunks)} chunks in parallel...")
+        import asyncio
+        summary_tasks = [
+            self._summarize_chunk(chunk, i, len(chunks))
+            for i, chunk in enumerate(chunks, 1)
+        ]
+        summaries = await asyncio.gather(*summary_tasks)
 
-            summary_prompt = f"""
+        # Combine summaries and create plan
+        combined_summary = "\n\n".join(summaries)
+        logger.info(f"✓ All chunks summarized. Combined: {len(combined_summary):,} characters")
+
+        # Now create plan from summaries
+        return await self._create_plan_single(combined_summary, total_samples, data_type, source_files)
+
+    async def _summarize_chunk(self, chunk: str, chunk_num: int, total_chunks: int) -> str:
+        """
+        Summarize a single chunk (async for parallel processing).
+
+        Args:
+            chunk: Content chunk to summarize
+            chunk_num: Chunk number (1-indexed)
+            total_chunks: Total number of chunks
+
+        Returns:
+            Summary text or error placeholder
+        """
+        logger.info(f"Summarizing chunk {chunk_num}/{total_chunks}...")
+
+        summary_prompt = f"""
 Analyze this section of source documents and provide a structured summary.
 
-SECTION {i} of {len(chunks)}:
+SECTION {chunk_num} of {total_chunks}:
 {chunk}
 
 Provide a summary covering:
@@ -252,20 +383,19 @@ Provide a summary covering:
 Keep summary to 3-5 paragraphs maximum.
 """
 
-            try:
-                response = self.model.generate_content(summary_prompt)
-                summaries.append(response.text.strip())
-                logger.info(f"✓ Chunk {i} summarized")
-            except Exception as e:
-                logger.error(f"Error summarizing chunk {i}: {e}")
-                summaries.append(f"[Chunk {i}: Could not summarize]")
-
-        # Combine summaries and create plan
-        combined_summary = "\n\n".join(summaries)
-        logger.info(f"Combined summaries: {len(combined_summary):,} characters")
-
-        # Now create plan from summaries
-        return await self._create_plan_single(combined_summary, total_samples, data_type, source_files)
+        try:
+            # Note: Gemini SDK doesn't have native async, but we can use sync in executor
+            import asyncio
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.model.generate_content(summary_prompt)
+            )
+            logger.info(f"✓ Chunk {chunk_num} summarized")
+            return response.text.strip()
+        except Exception as e:
+            logger.error(f"Error summarizing chunk {chunk_num}: {e}")
+            return f"[Chunk {chunk_num}: Could not summarize due to error: {str(e)[:100]}]"
 
     def _validate_and_fix_plan(self, plan: Dict[str, Any], target_samples: int) -> Dict[str, Any]:
         """
