@@ -260,6 +260,12 @@ class DataSimulator:
         """
         self.source = source
         self.data_type = data_type
+        self.batch_size = batch_size
+        self.quality_threshold = quality_threshold
+        self.diversity_threshold = diversity_threshold
+
+        # Store source files list for planner
+        self.source_files = [source] if isinstance(source, str) else (source if source else [])
 
         # Store checkpoint configuration
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
@@ -395,6 +401,22 @@ class DataSimulator:
         Returns:
             GeneratedDataset object with samples and analytics
         """
+        # Create generation plan if planning is enabled
+        generation_plan = None
+        if self.enable_planning and self.planner and self.source_content:
+            logger.info("Creating generation plan with Gemini...")
+            import asyncio
+            generation_plan = asyncio.run(
+                self.planner.create_generation_plan(
+                    source_content=self.source_content,
+                    total_samples=num_samples,
+                    data_type=self.data_type,
+                    source_files=self.source_files,
+                    batch_size=self.batch_size
+                )
+            )
+            logger.info(f"✓ Plan created: {generation_plan.get('num_batches', 0)} batches")
+
         # Create generation config
         config = GenerationConfig(
             num_samples=num_samples,
@@ -438,14 +460,15 @@ class DataSimulator:
                 f"Supported types: sft, dpo, verifiable_qa"
             )
 
-        # Generate samples (using asyncio) with checkpointing
+        # Generate samples (using asyncio) with checkpointing and optional plan
         import asyncio
         samples = asyncio.run(
             generator.generate(
                 num_samples,
                 show_progress,
                 checkpoint_dir=self.checkpoint_dir,
-                checkpoint_interval=self.checkpoint_interval
+                checkpoint_interval=self.checkpoint_interval,
+                generation_plan=generation_plan  # Pass plan to generator
             )
         )
 

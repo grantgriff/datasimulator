@@ -82,21 +82,26 @@ class SFTGenerator(BaseGenerator):
         else:
             return "general knowledge"
 
-    async def _generate_batch(self, batch_size: int) -> List[Dict[str, Any]]:
+    async def _generate_batch(
+        self,
+        batch_size: int,
+        batch_spec: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         """
         Generate a batch of SFT samples.
 
         Args:
             batch_size: Number of samples to generate
+            batch_spec: Optional batch specification from generation plan
 
         Returns:
             List of raw sample dictionaries
         """
         # Build generation prompt based on format type
         if self.format_type == "messages":
-            prompt = self._build_messages_prompt(batch_size)
+            prompt = self._build_messages_prompt(batch_size, batch_spec)
         else:
-            prompt = self._build_completion_prompt(batch_size)
+            prompt = self._build_completion_prompt(batch_size, batch_spec)
 
         # Generate batch
         try:
@@ -120,11 +125,116 @@ class SFTGenerator(BaseGenerator):
             logger.error(f"Error generating batch: {e}")
             return []
 
-    def _build_messages_prompt(self, batch_size: int) -> str:
-        """Build prompt for messages format generation."""
+    def _build_messages_prompt(
+        self,
+        batch_size: int,
+        batch_spec: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Build prompt for messages format generation with optional topic guidance."""
         system_prompt = self.system_prompt or self._get_default_system_prompt()
 
-        prompt = f"""
+        # If we have batch_spec, use topic-specific guidance
+        if batch_spec:
+            topic = batch_spec.get("topic", "General Content")
+            subtopic = batch_spec.get("subtopic", "")
+            guidance = batch_spec.get("guidance", "")
+            focus_areas = batch_spec.get("focus_areas", [])
+            relevant_files = batch_spec.get("relevant_files", [])
+
+            # Extract relevant source content (will implement next)
+            source_context = self._extract_relevant_source(relevant_files) if relevant_files else self.source_content
+
+            focus_list = "\n".join([f"- {area}" for area in focus_areas]) if focus_areas else ""
+
+            prompt = f"""
+You are an expert at generating high-quality training data for fine-tuning language models.
+
+=== GENERATION TASK ===
+
+DATA TYPE: SFT (Supervised Fine-Tuning)
+FORMAT: Messages (system/user/assistant)
+BATCH SIZE: {batch_size} samples
+
+=== TOPIC CONTEXT ===
+
+MAJOR TOPIC: {topic}
+SUBTOPIC: {subtopic}
+
+FOCUS AREAS:
+{focus_list}
+
+GENERATION GUIDANCE:
+{guidance}
+
+=== SOURCE MATERIAL ===
+
+RELEVANT DOCUMENTS: {", ".join(relevant_files) if relevant_files else "All source documents"}
+
+SOURCE CONTENT (use as factual basis for your examples):
+{source_context[:4000] if source_context else "No source content provided - generate from general knowledge."}
+
+=== GENERATION REQUIREMENTS ===
+
+1. Generate EXACTLY {batch_size} SFT training samples
+2. Each sample must include:
+   - system: Role description for the AI assistant
+   - user: A question or instruction
+   - assistant: A detailed, accurate response
+
+3. **CRITICAL**: All samples MUST focus on the topic/subtopic above
+   - Topic: {topic}
+   - Subtopic: {subtopic}
+   - Do NOT generate samples about other topics
+
+4. Use the FOCUS AREAS as your guide:
+{focus_list}
+
+5. Vary the difficulty across the {batch_size} samples:
+   - Samples 1-{batch_size//3}: Basic/foundational (definitions, concepts, simple examples)
+   - Samples {batch_size//3+1}-{2*batch_size//3}: Intermediate (calculations, procedures, method comparisons)
+   - Samples {2*batch_size//3+1}-{batch_size}: Advanced (complex scenarios, multi-step problems, analysis)
+
+6. Vary the question types:
+   - Conceptual: "What is...?", "Explain..."
+   - Calculation: "Calculate...", "Compute..."
+   - Procedural: "How do you...?", "What are the steps to...?"
+   - Analysis: "Compare...", "Explain why..."
+   - Application: "Given this scenario..."
+
+7. Ensure all information is accurate and based on the source material provided
+
+8. Make responses detailed and educational (not just brief answers)
+
+9. Use appropriate system prompts like: "{system_prompt}"
+
+OUTPUT FORMAT (JSON only):
+Return a JSON array with EXACTLY {batch_size} objects in this format:
+
+[
+  {{
+    "messages": [
+      {{
+        "role": "system",
+        "content": "You are an expert in {topic.lower()}..."
+      }},
+      {{
+        "role": "user",
+        "content": "Question or instruction here"
+      }},
+      {{
+        "role": "assistant",
+        "content": "Detailed, accurate response here..."
+      }}
+    ]
+  }},
+  ... {batch_size - 1} more samples ...
+]
+
+CRITICAL: Provide ONLY the JSON array. No introduction, no explanation, just the JSON.
+"""
+        else:
+            # Fallback to generic prompt if no batch_spec
+            prompt = f"""
 Generate {batch_size} diverse, high-quality training examples for supervised fine-tuning.
 
 **Domain:** {self.domain_context}
@@ -159,9 +269,77 @@ Return ONLY the JSON array, no other text.
 """
         return prompt
 
-    def _build_completion_prompt(self, batch_size: int) -> str:
-        """Build prompt for completion format generation."""
-        prompt = f"""
+    def _extract_relevant_source(self, relevant_files: List[str]) -> str:
+        """
+        Extract relevant portions of source content based on file names.
+
+        For now, returns all source content. In future, could:
+        - Store per-file content mapping
+        - Extract only sections from specified files
+        - Use RAG/embeddings to find relevant sections
+
+        Args:
+            relevant_files: List of relevant source file names
+
+        Returns:
+            Extracted source content
+        """
+        # TODO: Implement per-file extraction
+        # For now, return all source content
+        # In a future enhancement, we could:
+        # 1. Store content per file during loading
+        # 2. Only return content from files in relevant_files list
+        return self.source_content
+
+    def _build_completion_prompt(
+        self,
+        batch_size: int,
+        batch_spec: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Build prompt for completion format generation with optional topic guidance."""
+        # Similar structure to messages prompt, but for completion format
+        if batch_spec:
+            topic = batch_spec.get("topic", "General Content")
+            subtopic = batch_spec.get("subtopic", "")
+            guidance = batch_spec.get("guidance", "")
+            focus_areas = batch_spec.get("focus_areas", [])
+            relevant_files = batch_spec.get("relevant_files", [])
+
+            source_context = self._extract_relevant_source(relevant_files) if relevant_files else self.source_content
+            focus_list = "\n".join([f"- {area}" for area in focus_areas]) if focus_areas else ""
+
+            prompt = f"""
+Generate {batch_size} high-quality SFT training examples (completion format).
+
+TOPIC: {topic}
+SUBTOPIC: {subtopic}
+
+FOCUS AREAS:
+{focus_list}
+
+GUIDANCE: {guidance}
+
+SOURCE CONTENT:
+{source_context[:4000] if source_context else "No source content."}
+
+REQUIREMENTS:
+1. Generate EXACTLY {batch_size} samples about {topic} → {subtopic}
+2. Each sample has "prompt" and "completion" fields
+3. Use focus areas as guide
+4. Vary difficulty: {batch_size//3} easy, {batch_size//3} medium, {batch_size//3} hard
+5. Ensure accuracy based on source material
+
+Return JSON array of {batch_size} examples:
+[
+  {{"prompt": "Question: ...", "completion": "..."}},
+  ...
+]
+
+ONLY JSON, no other text.
+"""
+        else:
+            # Fallback to generic prompt if no batch_spec
+            prompt = f"""
 Generate {batch_size} diverse, high-quality training examples for supervised fine-tuning.
 
 **Domain:** {self.domain_context}
