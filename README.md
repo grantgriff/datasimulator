@@ -2,20 +2,21 @@
 
 Generate high-quality post-training datasets for fine-tuning language models.
 
-DataSimulator is an SDK that creates synthetic training data for SFT, DPO, PPO, GRPO, and RL from documents, images, and natural language prompts.
+DataSimulator is an SDK that creates synthetic training data for SFT, DPO, and verifiable Q&A from documents, images, and natural language prompts.
 
 ## Features
 
-- **Multiple Training Formats**: SFT, DPO, PPO, GRPO, and RL with verifiable rewards
-- **Autonomous Generation**: Specify target rows and let the system handle the rest
-- **Quality Assurance**: Built-in quality scoring with configurable thresholds
+- **Multiple Training Formats**: SFT, DPO, and verifiable Q&A
+- **Multi-File Loading**: Load 10+ documents simultaneously for comprehensive training data
+- **Gemini Planning**: AI-powered analysis extracts 5-50 topics and allocates samples intelligently
+- **Autonomous Generation**: Non-interactive mode for large-scale unattended generation
+- **Batched Quality Checks**: 50 samples per API call reduces verification cost by 50x
+- **Checkpointing**: Auto-save every 20 samples for crash recovery
+- **Retry Limits**: Max 10 retries prevents infinite regeneration loops
 - **Cost Controls**: Automatic tracking with configurable limits
-- **Batch Processing**: Generate 20+ rows per API call for efficiency
 - **Multi-Model Support**: Claude, OpenAI, Ollama, and local models
 - **Universal Document Loading**: PDFs, Word docs, images (OCR), web pages, Google Docs
-- **Automatic Format Detection**: Smart loader selection based on file type
-- **Iterative Refinement**: Automatically regenerate low-quality samples
-- **Analytics Dashboard**: Real-time quality metrics and visualizations
+- **Analytics Dashboard**: Real-time quality metrics and cost breakdown
 
 ## Installation
 
@@ -37,19 +38,24 @@ cp .env.example .env
 ```python
 from datasimulator import DataSimulator
 
+# Load multiple files with Gemini planning
 sdk = DataSimulator(
-    source="document.pdf",
+    source=["doc1.pdf", "doc2.pdf", "doc3.pdf"],
     data_type="sft",
     models={
         "generator": "claude-3-5-sonnet-20241022",
         "verifier": "gpt-4o-mini"
     },
     quality_threshold=6.0,
-    max_cost=20.0
+    max_cost=40.0,
+    interactive=False,          # Autonomous mode
+    enable_planning=True,       # Gemini topic extraction
+    checkpoint_dir="checkpoints"
 )
 
-dataset = sdk.generate(num_samples=1000)
+dataset = sdk.generate(num_samples=2500)
 dataset.save("output.jsonl")
+dataset.show_analytics()
 ```
 
 ## Supported Data Formats
@@ -85,23 +91,7 @@ dataset.save("output.jsonl")
 }
 ```
 
-### PPO (Proximal Policy Optimization)
-
-```json
-{
-  "prompt": "Question or task"
-}
-```
-
-### GRPO (Group Relative Policy Optimization)
-
-```json
-{
-  "prompt": "Question or task requiring multiple completions"
-}
-```
-
-### RL with Verifiable Rewards
+### Verifiable Q&A
 
 ```json
 {
@@ -112,6 +102,44 @@ dataset.save("output.jsonl")
 ```
 
 ## Usage Examples
+
+### Load Multiple Files with Gemini Planning
+
+```python
+# Load 10+ documents and let Gemini analyze them
+accounting_files = [
+    "docs/financial_accounting.pdf",
+    "docs/managerial_accounting.pdf",
+    "docs/accounts_receivable.pdf",
+    # ... up to 10+ files
+]
+
+sdk = DataSimulator(
+    source=accounting_files,  # Pass list of files
+    data_type="sft",
+    models={
+        "generator": "claude-3-5-sonnet-20241022",
+        "verifier": "gpt-4o-mini"
+    },
+    enable_planning=True,  # Gemini extracts topics
+    google_api_key="YOUR_KEY"
+)
+```
+
+### Autonomous Generation with Checkpointing
+
+```python
+sdk = DataSimulator(
+    source=["doc1.pdf", "doc2.pdf"],
+    data_type="sft",
+    max_cost=40.0,         # Set high budget upfront
+    interactive=False,     # No prompts - fully autonomous
+    checkpoint_dir="checkpoints",
+    checkpoint_interval=20  # Save every 20 samples
+)
+
+dataset = sdk.generate(num_samples=2500)
+```
 
 ### Different Models per Task
 
@@ -181,8 +209,9 @@ high_quality.save("high_quality.jsonl")
 
 ## Cost Management
 
-The SDK automatically tracks costs and prompts when limits are reached:
+The SDK automatically tracks costs with two modes:
 
+**Interactive Mode (default):** Prompts when limits are reached
 ```
 COST LIMIT REACHED: $20.00 / $20.00
 ========================================
@@ -192,6 +221,15 @@ Cost Breakdown:
   Total       : $ 20.00
 
 Continue? This will increase limit by $20.00. (y/n):
+```
+
+**Non-Interactive Mode:** For autonomous generation
+```python
+sdk = DataSimulator(
+    source=files,
+    max_cost=40.0,      # Set high limit upfront
+    interactive=False   # No prompts
+)
 ```
 
 ## Analytics
@@ -224,6 +262,7 @@ Cost Breakdown:
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
+GOOGLE_API_KEY=...  # For Gemini planning
 MAX_COST_USD=20.0
 DEFAULT_BATCH_SIZE=20
 QUALITY_THRESHOLD=6.0
@@ -233,17 +272,22 @@ QUALITY_THRESHOLD=6.0
 
 ```python
 sdk = DataSimulator(
-    source="document.pdf",
+    source=["doc1.pdf", "doc2.pdf"],  # Single file or list
     data_type="sft",
     models={
         "generator": "claude-3-5-sonnet-20241022",
         "verifier": "gpt-4o-mini"
     },
     quality_threshold=6.0,
-    max_cost=20.0,
+    max_cost=40.0,
     batch_size=20,
+    interactive=False,           # Autonomous mode
+    checkpoint_dir="checkpoints",
+    checkpoint_interval=20,       # Save every 20 samples
+    enable_planning=True,         # Gemini topic extraction
     anthropic_api_key="...",
-    openai_api_key="..."
+    openai_api_key="...",
+    google_api_key="..."
 )
 ```
 
@@ -251,16 +295,19 @@ sdk = DataSimulator(
 
 See the `examples/` directory:
 
+- `examples/accounting_production_example.py` - Production-ready: Load 10 docs, generate 2000-3000 samples
+- `examples/autonomous_batch_example.py` - Multi-file autonomous generation with checkpointing
 - `examples/basic_sft_example.py` - Basic SFT generation
 - `examples/pdf_loader_example.py` - Generate from PDFs
 - `examples/web_scraping_example.py` - Generate from web pages
-- `examples/all_generators_example.py` - All format types
 - `examples/dpo_example.py` - DPO preference pairs
-- `examples/rl_verifiable_example.py` - RL with ground truth
+- `examples/verifiable_qa_example.py` - Verifiable Q&A
+
+**Quick Start Guide:** See `QUICKSTART_ACCOUNTING.md` for production use case
 
 Run any example:
 ```bash
-python examples/basic_sft_example.py
+python examples/accounting_production_example.py
 ```
 
 ## Project Structure
@@ -269,18 +316,18 @@ python examples/basic_sft_example.py
 datasimulator/
 ├── core/
 │   ├── generators/              # Data generation engines
-│   │   ├── base_generator.py
+│   │   ├── base_generator.py   # Batched quality checks, retry limits
 │   │   ├── sft_generator.py
 │   │   ├── dpo_generator.py
-│   │   ├── ppo_generator.py
-│   │   ├── grpo_generator.py
-│   │   └── rl_verifiable_generator.py
+│   │   └── verifiable_qa_generator.py
 │   ├── models/
 │   │   └── llm_client.py        # Multi-provider LLM client
 │   └── data_models.py           # Pydantic schemas
+├── planning/                    # Gemini planning layer
+│   └── gemini_planner.py        # Topic extraction, chunking, allocation
 ├── sources/                     # Document loaders
 │   ├── base_loader.py
-│   ├── document_loader.py
+│   ├── document_loader.py       # Multi-file support
 │   └── loaders/
 │       ├── pdf_loader.py
 │       ├── word_loader.py
@@ -297,7 +344,7 @@ datasimulator/
 ├── analytics/
 │   └── visualizations.py
 ├── utils/
-│   └── cost_tracker.py
+│   └── cost_tracker.py          # Interactive & non-interactive modes
 ├── sdk.py                       # Main SDK interface
 └── requirements.txt
 ```

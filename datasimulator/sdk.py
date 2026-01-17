@@ -7,7 +7,7 @@ Simple API for generating high-quality post-training datasets.
 import json
 import logging
 from pathlib import Path
-from typing import Optional, Literal, Dict, Any, List
+from typing import Optional, Literal, Dict, Any, List, Union
 from datetime import datetime
 
 from .core.data_models import (
@@ -19,9 +19,7 @@ from .core.data_models import (
 from .core.models.llm_client import ModelRouter
 from .core.generators.sft_generator import SFTGenerator
 from .core.generators.dpo_generator import DPOGenerator
-from .core.generators.ppo_generator import PPOGenerator
-from .core.generators.grpo_generator import GRPOGenerator
-from .core.generators.rl_verifiable_generator import RLVerifiableGenerator
+from .core.generators.verifiable_qa_generator import VerifiableQAGenerator
 from .utils.cost_tracker import CostTracker
 from .sources.document_loader import DocumentLoader, load_document
 from .sources.base_loader import LoaderException
@@ -223,13 +221,18 @@ class DataSimulator:
 
     def __init__(
         self,
-        source: Optional[str] = None,
-        data_type: Literal["sft", "dpo", "ppo", "grpo", "rl_verifiable"] = "sft",
+        source: Optional[Union[str, List[str]]] = None,
+        data_type: Literal["sft", "dpo", "verifiable_qa"] = "sft",
         models: Optional[Dict[str, str]] = None,
         quality_threshold: float = 6.0,
         diversity_threshold: float = 0.85,
         max_cost: float = 20.0,
         batch_size: int = 20,
+        interactive: bool = True,
+        checkpoint_dir: Optional[str] = None,
+        checkpoint_interval: int = 20,
+        enable_planning: bool = False,
+        google_api_key: Optional[str] = None,
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
     ):
@@ -237,7 +240,7 @@ class DataSimulator:
         Initialize DataSimulator.
 
         Args:
-            source: Path to source document or URL (optional)
+            source: Path to source document(s) or URL(s) - can be single string or list of strings
             data_type: Type of training data to generate
             models: Dictionary mapping roles to model names
                 - generator: Main generation model
@@ -247,11 +250,23 @@ class DataSimulator:
             diversity_threshold: Maximum similarity for diversity (0-1)
             max_cost: Maximum cost before prompting user (USD)
             batch_size: Number of samples per API call
+            interactive: Whether to prompt user when cost limit is reached (False for autonomous)
+            checkpoint_dir: Directory to save checkpoints (optional)
+            checkpoint_interval: Save checkpoint every N samples (default: 20)
+            enable_planning: Use Gemini to analyze sources and create generation plan
+            google_api_key: Google API key for Gemini planning (or use GOOGLE_API_KEY env)
             anthropic_api_key: Anthropic API key (or use ANTHROPIC_API_KEY env)
             openai_api_key: OpenAI API key (or use OPENAI_API_KEY env)
         """
         self.source = source
         self.data_type = data_type
+
+        # Store checkpoint configuration
+        self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
+        self.checkpoint_interval = checkpoint_interval
+        if self.checkpoint_dir:
+            self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Checkpointing enabled: {self.checkpoint_dir} (every {checkpoint_interval} samples)")
 
         # Load source content if provided
         self.source_content = self._load_source() if source else None
@@ -270,8 +285,23 @@ class DataSimulator:
             openai_api_key=openai_api_key
         )
 
-        # Setup cost tracking
-        self.cost_tracker = CostTracker(max_cost=max_cost)
+        # Setup cost tracking with interactive mode
+        self.cost_tracker = CostTracker(max_cost=max_cost, interactive=interactive)
+        if not interactive:
+            logger.info(f"Non-interactive mode: will not prompt when cost limit reached")
+
+        # Setup planning (optional Gemini integration)
+        self.enable_planning = enable_planning
+        self.planner = None
+        if enable_planning:
+            try:
+                from .planning import GeminiPlanner
+                self.planner = GeminiPlanner(api_key=google_api_key)
+                logger.info("Gemini planning enabled")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Gemini planner: {e}")
+                logger.warning("Continuing without planning layer")
+                self.enable_planning = False
 
         # Store configuration
         self.quality_threshold = quality_threshold
@@ -284,9 +314,11 @@ class DataSimulator:
 
     def _load_source(self) -> str:
         """
-        Load source content from file or URL.
+        Load source content from file(s) or URL(s).
 
         Supports:
+        - Single source: string path/URL
+        - Multiple sources: list of paths/URLs
         - Plain text files (.txt, .md)
         - PDF files (.pdf)
         - Word documents (.docx)
@@ -297,31 +329,52 @@ class DataSimulator:
         if not self.source:
             return ""
 
-        try:
-            logger.info(f"Loading source: {self.source}")
+        # Handle multiple sources
+        sources = [self.source] if isinstance(self.source, str) else self.source
 
-            # Use unified document loader
-            loader = DocumentLoader(self.source)
-            content = loader.load()
+        logger.info(f"Loading {len(sources)} source(s)...")
+        combined_content = []
+        successful_loads = 0
 
-            # Get metadata
-            metadata = loader.get_metadata()
-            logger.info(
-                f"Loaded {len(content)} characters from {self.source} "
-                f"(type: {metadata.get('method', 'unknown')})"
-            )
+        for i, source in enumerate(sources, 1):
+            try:
+                logger.info(f"  [{i}/{len(sources)}] Loading: {source}")
 
-            return content
+                # Use unified document loader
+                loader = DocumentLoader(source)
+                content = loader.load()
 
-        except LoaderException as e:
-            logger.error(f"Error loading source: {e}")
-            # Don't fail - just return empty string and continue
-            logger.warning("Continuing without source content")
+                # Get metadata
+                metadata = loader.get_metadata()
+                logger.info(
+                    f"    ✓ Loaded {len(content)} characters "
+                    f"(type: {metadata.get('method', 'unknown')})"
+                )
+
+                # Add source separator for multiple files
+                if len(sources) > 1:
+                    combined_content.append(f"\n\n=== Source {i}: {source} ===\n\n{content}")
+                else:
+                    combined_content.append(content)
+
+                successful_loads += 1
+
+            except LoaderException as e:
+                logger.error(f"    ✗ Error loading {source}: {e}")
+            except Exception as e:
+                logger.error(f"    ✗ Unexpected error loading {source}: {e}")
+
+        if successful_loads == 0:
+            logger.warning("Failed to load any sources, continuing without source content")
             return ""
-        except Exception as e:
-            logger.error(f"Unexpected error loading source: {e}")
-            logger.warning("Continuing without source content")
-            return ""
+
+        full_content = "\n\n".join(combined_content)
+        logger.info(
+            f"✓ Successfully loaded {successful_loads}/{len(sources)} source(s) "
+            f"({len(full_content)} total characters)"
+        )
+
+        return full_content
 
     def generate(
         self,
@@ -371,25 +424,8 @@ class DataSimulator:
                 config=config,
                 source_content=self.source_content
             )
-        elif self.data_type == "ppo":
-            generator = PPOGenerator(
-                prompt_style="open_ended",  # Default to open-ended prompts
-                model_router=self.model_router,
-                cost_tracker=self.cost_tracker,
-                config=config,
-                source_content=self.source_content
-            )
-        elif self.data_type == "grpo":
-            generator = GRPOGenerator(
-                num_completions=4,  # Default to 4 completions per prompt
-                task_type="verifiable",  # Default to verifiable tasks
-                model_router=self.model_router,
-                cost_tracker=self.cost_tracker,
-                config=config,
-                source_content=self.source_content
-            )
-        elif self.data_type == "rl_verifiable":
-            generator = RLVerifiableGenerator(
+        elif self.data_type == "verifiable_qa":
+            generator = VerifiableQAGenerator(
                 verification_type="exact_match",  # Default verification type
                 model_router=self.model_router,
                 cost_tracker=self.cost_tracker,
@@ -399,12 +435,19 @@ class DataSimulator:
         else:
             raise ValueError(
                 f"Unknown data type: {self.data_type}. "
-                f"Supported types: sft, dpo, ppo, grpo, rl_verifiable"
+                f"Supported types: sft, dpo, verifiable_qa"
             )
 
-        # Generate samples (using asyncio)
+        # Generate samples (using asyncio) with checkpointing
         import asyncio
-        samples = asyncio.run(generator.generate(num_samples, show_progress))
+        samples = asyncio.run(
+            generator.generate(
+                num_samples,
+                show_progress,
+                checkpoint_dir=self.checkpoint_dir,
+                checkpoint_interval=self.checkpoint_interval
+            )
+        )
 
         # Create dataset
         dataset = GeneratedDataset(

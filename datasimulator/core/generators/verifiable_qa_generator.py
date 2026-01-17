@@ -1,7 +1,7 @@
 """
-RL with Verifiable Rewards generator.
+Verifiable QA generator.
 
-Generates prompts with ground truth answers for verifiable reinforcement learning.
+Generates question-answer pairs with ground truth for automatic verification.
 Ideal for tasks with objectively correct answers (math, coding, factual questions).
 """
 
@@ -16,9 +16,9 @@ from ..data_models import RLVerifiable, TrainingDataFormat
 logger = logging.getLogger(__name__)
 
 
-class RLVerifiableGenerator(BaseGenerator):
+class VerifiableQAGenerator(BaseGenerator):
     """
-    Generate RL training data with verifiable rewards.
+    Generate verifiable question-answer training data.
 
     Generates prompts with ground truth answers that can be automatically verified.
     Perfect for:
@@ -41,7 +41,7 @@ class RLVerifiableGenerator(BaseGenerator):
         **kwargs
     ):
         """
-        Initialize RL verifiable generator.
+        Initialize Verifiable QA generator.
 
         Args:
             verification_type: How to verify the ground truth
@@ -62,13 +62,13 @@ class RLVerifiableGenerator(BaseGenerator):
 
     @property
     def data_format(self) -> Type[TrainingDataFormat]:
-        """Return Pydantic model for RL verifiable format."""
+        """Return Pydantic model for verifiable QA format."""
         return RLVerifiable
 
     @property
     def data_type_name(self) -> str:
         """Return data type name."""
-        return "rl_verifiable"
+        return "verifiable_qa"
 
     def _infer_domain(self) -> str:
         """Infer domain from source content."""
