@@ -88,17 +88,22 @@ class VerifiableQAGenerator(BaseGenerator):
         else:
             return "general knowledge"
 
-    async def _generate_batch(self, batch_size: int) -> List[Dict[str, Any]]:
+    async def _generate_batch(
+        self,
+        batch_size: int,
+        batch_spec: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         """
-        Generate a batch of RL verifiable samples.
+        Generate a batch of verifiable Q&A samples.
 
         Args:
             batch_size: Number of samples to generate
+            batch_spec: Optional batch specification from generation plan
 
         Returns:
             List of raw sample dictionaries
         """
-        prompt = self._build_generation_prompt(batch_size)
+        prompt = self._build_generation_prompt(batch_size, batch_spec)
 
         # Generate batch
         try:
@@ -122,12 +127,72 @@ class VerifiableQAGenerator(BaseGenerator):
             logger.error(f"Error generating batch: {e}")
             return []
 
-    def _build_generation_prompt(self, batch_size: int) -> str:
-        """Build prompt for RL verifiable generation."""
+    def _build_generation_prompt(
+        self,
+        batch_size: int,
+        batch_spec: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Build prompt for verifiable Q&A generation with optional topic guidance."""
         verification_instructions = self._get_verification_instructions()
 
-        prompt = f"""
-Generate {batch_size} verifiable training examples for Reinforcement Learning.
+        if batch_spec:
+            topic = batch_spec.get("topic", "General Content")
+            subtopic = batch_spec.get("subtopic", "")
+            guidance = batch_spec.get("guidance", "")
+            focus_areas = batch_spec.get("focus_areas", [])
+            relevant_files = batch_spec.get("relevant_files", [])
+
+            source_context = self._extract_relevant_source(relevant_files) if relevant_files else self.source_content
+            focus_list = "\n".join([f"- {area}" for area in focus_areas]) if focus_areas else ""
+
+            prompt = f"""
+Generate {batch_size} verifiable Q&A examples.
+
+=== TOPIC CONTEXT ===
+MAJOR TOPIC: {topic}
+SUBTOPIC: {subtopic}
+FOCUS AREAS: {focus_list}
+GUIDANCE: {guidance}
+
+=== SOURCE MATERIAL ===
+RELEVANT DOCUMENTS: {", ".join(relevant_files) if relevant_files else "All documents"}
+
+**IMPORTANT:** Use source content as PRIMARY inspiration - extract factual questions with verifiable answers directly from the material below.
+
+SOURCE CONTENT:
+{source_context[:4000] if source_context else "No source content."}
+
+=== REQUIREMENTS ===
+
+1. **FORMAT TYPE: Verifiable Q&A**
+   Each sample has "prompt", "ground_truth", "verification_type" fields
+
+2. EXAMPLE FORMAT (for {self.verification_type}):
+{{
+  "prompt": "A company has $500,000 in AR and estimates 3% uncollectible. What is bad debt expense?",
+  "ground_truth": "15000",
+  "verification_type": "{self.verification_type}",
+  "metadata": {{"calculation": "500000 * 0.03 = 15000"}}
+}}
+
+3. **CONTENT SOURCE**: Pull questions/answers DIRECTLY from source material
+   - Extract facts, calculations, definitions from the sources
+   - Ensure ground_truth answers are objectively verifiable
+   - Base numeric questions on calculations shown in sources
+
+4. **VERIFICATION TYPE**: {self.verification_type}
+{verification_instructions}
+
+5. Generate EXACTLY {batch_size} samples about "{topic} → {subtopic}"
+
+6. Difficulty: {batch_size//3} basic, {batch_size//3} intermediate, {batch_size//3} advanced
+
+Return JSON array: [{{"prompt": "...", "ground_truth": "...", "verification_type": "{self.verification_type}"}}, ...]
+ONLY JSON, no other text.
+"""
+        else:
+            prompt = f"""
+Generate {batch_size} verifiable training examples.
 
 **Domain:** {self.domain_context}
 
@@ -150,34 +215,35 @@ Generate {batch_size} verifiable training examples for Reinforcement Learning.
 **Source Context (use as inspiration):**
 {self.source_content[:2000] if self.source_content else "Generate verifiable examples in the specified domain."}
 
-**Example Formats:**
-
-For numeric_match:
-{{
-  "prompt": "A company has $500,000 in accounts receivable and estimates 3% will be uncollectible. What is the bad debt expense?",
-  "ground_truth": "15000",
-  "verification_type": "numeric_match",
-  "metadata": {{"calculation": "500000 * 0.03 = 15000"}}
-}}
-
-For exact_match:
-{{
-  "prompt": "What year was the FASB established?",
-  "ground_truth": "1973",
-  "verification_type": "exact_match"
-}}
-
-For contains:
-{{
-  "prompt": "What are the three main financial statements?",
-  "ground_truth": "income statement, balance sheet, cash flow statement",
-  "verification_type": "contains"
-}}
-
-Return a JSON array of {batch_size} examples following the format above.
+Return a JSON array of {batch_size} examples.
 Return ONLY the JSON array, no other text.
 """
         return prompt
+
+    def _extract_relevant_source(self, relevant_files: List[str]) -> str:
+        """Extract ONLY relevant source content based on file names."""
+        if not relevant_files or not self.source_content_by_file:
+            return self.source_content
+
+        relevant_content = []
+        for file_path in relevant_files:
+            matched = False
+            for stored_key, content in self.source_content_by_file.items():
+                if stored_key.endswith(file_path) or file_path.endswith(stored_key):
+                    relevant_content.append(f"\n\n=== {file_path} ===\n\n{content}")
+                    matched = True
+                    break
+
+            if not matched:
+                logger.warning(f"Could not find content for file: {file_path}")
+
+        if not relevant_content:
+            logger.warning(f"No matching files found for {relevant_files}, using all content")
+            return self.source_content
+
+        combined = "\n\n".join(relevant_content)
+        logger.debug(f"Extracted {len(combined)} chars from {len(relevant_content)} relevant files")
+        return combined
 
     def _get_verification_instructions(self) -> str:
         """Get instructions for verification type."""

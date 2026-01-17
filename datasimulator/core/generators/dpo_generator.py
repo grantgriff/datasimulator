@@ -85,21 +85,26 @@ class DPOGenerator(BaseGenerator):
         else:
             return "general knowledge"
 
-    async def _generate_batch(self, batch_size: int) -> List[Dict[str, Any]]:
+    async def _generate_batch(
+        self,
+        batch_size: int,
+        batch_spec: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         """
         Generate a batch of DPO preference pairs.
 
         Args:
             batch_size: Number of preference pairs to generate
+            batch_spec: Optional batch specification from generation plan
 
         Returns:
             List of raw preference pair dictionaries
         """
         # Build generation prompt based on format type
         if self.format_type == "messages":
-            prompt = self._build_messages_prompt(batch_size)
+            prompt = self._build_messages_prompt(batch_size, batch_spec)
         else:
-            prompt = self._build_preference_prompt(batch_size)
+            prompt = self._build_preference_prompt(batch_size, batch_spec)
 
         # Generate batch
         try:
@@ -123,11 +128,67 @@ class DPOGenerator(BaseGenerator):
             logger.error(f"Error generating batch: {e}")
             return []
 
-    def _build_preference_prompt(self, batch_size: int) -> str:
-        """Build prompt for preference format generation."""
+    def _build_preference_prompt(
+        self,
+        batch_size: int,
+        batch_spec: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Build prompt for preference format generation with optional topic guidance."""
         strategy_instructions = self._get_strategy_instructions()
 
-        prompt = f"""
+        if batch_spec:
+            topic = batch_spec.get("topic", "General Content")
+            subtopic = batch_spec.get("subtopic", "")
+            guidance = batch_spec.get("guidance", "")
+            focus_areas = batch_spec.get("focus_areas", [])
+            relevant_files = batch_spec.get("relevant_files", [])
+
+            source_context = self._extract_relevant_source(relevant_files) if relevant_files else self.source_content
+            focus_list = "\n".join([f"- {area}" for area in focus_areas]) if focus_areas else ""
+
+            prompt = f"""
+Generate {batch_size} high-quality DPO preference pairs.
+
+=== TOPIC CONTEXT ===
+MAJOR TOPIC: {topic}
+SUBTOPIC: {subtopic}
+FOCUS AREAS: {focus_list}
+GUIDANCE: {guidance}
+
+=== SOURCE MATERIAL ===
+RELEVANT DOCUMENTS: {", ".join(relevant_files) if relevant_files else "All documents"}
+
+**IMPORTANT:** Use source content as PRIMARY inspiration - extract topics, examples, and terminology directly from the material below.
+
+SOURCE CONTENT:
+{source_context[:4000] if source_context else "No source content."}
+
+=== REQUIREMENTS ===
+
+1. **FORMAT TYPE: DPO (Direct Preference Optimization) - Preference Format**
+   Each sample has "prompt", "chosen", "rejected" fields
+
+2. EXAMPLE FORMAT:
+{{
+  "prompt": "What is the journal entry for recording bad debt expense?",
+  "chosen": "The journal entry is:\\nDR Bad Debt Expense $X\\n   CR Allowance for Doubtful Accounts $X\\n\\nThis follows the matching principle and is required under GAAP.",
+  "rejected": "You just write off the bad debt when someone doesn't pay."
+}}
+
+3. **CONTENT SOURCE**: Pull questions/examples DIRECTLY from source material above
+
+4. **PREFERENCE STRATEGY**: {self.preference_strategy}
+{strategy_instructions}
+
+5. Generate EXACTLY {batch_size} samples about "{topic} → {subtopic}"
+
+6. Difficulty: {batch_size//3} basic, {batch_size//3} intermediate, {batch_size//3} advanced
+
+Return JSON array: [{{"prompt": "...", "chosen": "...", "rejected": "..."}}, ...]
+ONLY JSON, no other text.
+"""
+        else:
+            prompt = f"""
 Generate {batch_size} diverse preference pairs for Direct Preference Optimization (DPO).
 
 **Domain:** {self.domain_context}
@@ -143,10 +204,7 @@ Generate {batch_size} diverse preference pairs for Direct Preference Optimizatio
 **Quality Requirements:**
 - Prompts should be specific and relevant to the domain
 - Chosen responses should be high quality, accurate, and complete
-- Rejected responses should be noticeably worse but still plausible:
-  * If quality strategy: Less accurate, incomplete, or unclear
-  * If style strategy: Too informal, casual, or unprofessional
-  * If length strategy: Too brief or lacking detail
+- Rejected responses should be noticeably worse but still plausible
 - Make the difference clear but subtle (not obviously wrong)
 - Vary question difficulty and topics
 
@@ -164,11 +222,72 @@ Return ONLY the JSON array, no other text.
 """
         return prompt
 
-    def _build_messages_prompt(self, batch_size: int) -> str:
-        """Build prompt for messages format generation."""
+    def _build_messages_prompt(
+        self,
+        batch_size: int,
+        batch_spec: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Build prompt for messages format generation with optional topic guidance."""
         strategy_instructions = self._get_strategy_instructions()
 
-        prompt = f"""
+        if batch_spec:
+            topic = batch_spec.get("topic", "General Content")
+            subtopic = batch_spec.get("subtopic", "")
+            guidance = batch_spec.get("guidance", "")
+            focus_areas = batch_spec.get("focus_areas", [])
+            relevant_files = batch_spec.get("relevant_files", [])
+
+            source_context = self._extract_relevant_source(relevant_files) if relevant_files else self.source_content
+            focus_list = "\n".join([f"- {area}" for area in focus_areas]) if focus_areas else ""
+
+            prompt = f"""
+Generate {batch_size} high-quality DPO preference pairs (messages format).
+
+=== TOPIC CONTEXT ===
+MAJOR TOPIC: {topic}
+SUBTOPIC: {subtopic}
+FOCUS AREAS: {focus_list}
+GUIDANCE: {guidance}
+
+=== SOURCE MATERIAL ===
+RELEVANT DOCUMENTS: {", ".join(relevant_files) if relevant_files else "All documents"}
+
+**IMPORTANT:** Use source content as PRIMARY inspiration.
+
+SOURCE CONTENT:
+{source_context[:4000] if source_context else "No source content."}
+
+=== REQUIREMENTS ===
+
+1. **FORMAT TYPE: DPO - Messages Format**
+   Each sample has "prompt", "chosen", "rejected" arrays
+
+2. EXAMPLE FORMAT:
+{{
+  "prompt": [
+    {{"role": "system", "content": "You are an expert accountant."}},
+    {{"role": "user", "content": "What is the journal entry for bad debt expense?"}}
+  ],
+  "chosen": [
+    {{"role": "assistant", "content": "DR Bad Debt Expense $X\\n   CR Allowance for Doubtful Accounts $X\\nThis follows the matching principle under GAAP."}}
+  ],
+  "rejected": [
+    {{"role": "assistant", "content": "Just write it off when they don't pay."}}
+  ]
+}}
+
+3. **CONTENT SOURCE**: Pull questions/examples DIRECTLY from source material
+
+4. **PREFERENCE STRATEGY**: {self.preference_strategy}
+{strategy_instructions}
+
+5. Generate EXACTLY {batch_size} samples about "{topic} → {subtopic}"
+
+Return JSON array with the format shown above.
+ONLY JSON, no other text.
+"""
+        else:
+            prompt = f"""
 Generate {batch_size} diverse preference pairs for Direct Preference Optimization (DPO).
 
 **Domain:** {self.domain_context}
@@ -201,6 +320,39 @@ Return a JSON array of {batch_size} examples with this structure:
 Return ONLY the JSON array, no other text.
 """
         return prompt
+
+    def _extract_relevant_source(self, relevant_files: List[str]) -> str:
+        """
+        Extract ONLY relevant source content based on file names.
+
+        Args:
+            relevant_files: List of relevant source file names from batch_spec
+
+        Returns:
+            Combined content from ONLY the specified files
+        """
+        if not relevant_files or not self.source_content_by_file:
+            return self.source_content
+
+        relevant_content = []
+        for file_path in relevant_files:
+            matched = False
+            for stored_key, content in self.source_content_by_file.items():
+                if stored_key.endswith(file_path) or file_path.endswith(stored_key):
+                    relevant_content.append(f"\n\n=== {file_path} ===\n\n{content}")
+                    matched = True
+                    break
+
+            if not matched:
+                logger.warning(f"Could not find content for file: {file_path}")
+
+        if not relevant_content:
+            logger.warning(f"No matching files found for {relevant_files}, using all content")
+            return self.source_content
+
+        combined = "\n\n".join(relevant_content)
+        logger.debug(f"Extracted {len(combined)} chars from {len(relevant_content)} relevant files")
+        return combined
 
     def _get_strategy_instructions(self) -> str:
         """Get instructions for the preference strategy."""
