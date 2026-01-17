@@ -39,6 +39,7 @@ class BaseGenerator(ABC):
         cost_tracker: CostTracker,
         config: GenerationConfig,
         source_content: Optional[str] = None,
+        source_content_by_file: Optional[Dict[str, str]] = None,
         max_retries: int = 10,
         quality_check_batch_size: int = 50
     ):
@@ -49,7 +50,8 @@ class BaseGenerator(ABC):
             model_router: Router for different model tasks
             cost_tracker: Cost tracking system
             config: Generation configuration
-            source_content: Source material for generation context
+            source_content: Combined source material for generation context
+            source_content_by_file: Per-file source content mapping (filename -> content)
             max_retries: Maximum retry attempts for failed samples
             quality_check_batch_size: Number of samples to check per API call
         """
@@ -57,6 +59,7 @@ class BaseGenerator(ABC):
         self.cost_tracker = cost_tracker
         self.config = config
         self.source_content = source_content or ""
+        self.source_content_by_file = source_content_by_file or {}
         self.max_retries = max_retries
         self.quality_check_batch_size = quality_check_batch_size
 
@@ -78,12 +81,22 @@ class BaseGenerator(ABC):
         pass
 
     @abstractmethod
-    async def _generate_batch(self, batch_size: int) -> List[Dict[str, Any]]:
+    async def _generate_batch(
+        self,
+        batch_size: int,
+        batch_spec: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         """
         Generate a batch of samples.
 
         Args:
             batch_size: Number of samples to generate
+            batch_spec: Optional batch specification from generation plan containing:
+                - topic: Major topic name
+                - subtopic: Specific subtopic for this batch
+                - guidance: Detailed generation instructions
+                - relevant_files: List of relevant source files
+                - focus_areas: Key concepts to cover
 
         Returns:
             List of raw sample dictionaries
@@ -241,7 +254,8 @@ Output (JSON array only):
         num_samples: int,
         show_progress: bool = True,
         checkpoint_dir: Optional[Any] = None,
-        checkpoint_interval: int = 100
+        checkpoint_interval: int = 100,
+        generation_plan: Optional[Dict[str, Any]] = None
     ) -> List[DatasetSample]:
         """
         Generate dataset samples with quality checking and refinement.
@@ -251,6 +265,7 @@ Output (JSON array only):
             show_progress: Whether to show progress information
             checkpoint_dir: Directory to save checkpoints (Path object or None)
             checkpoint_interval: Save checkpoint every N samples
+            generation_plan: Optional batch-level plan from GeminiPlanner with topic-specific guidance
 
         Returns:
             List of validated, high-quality samples
@@ -264,8 +279,22 @@ Output (JSON array only):
             print(f"💰 Cost limit: ${self.config.max_cost:.2f}")
             if checkpoint_dir:
                 print(f"💾 Checkpointing enabled: every {checkpoint_interval} samples")
+            if generation_plan and "batches" in generation_plan:
+                print(f"📋 Using Gemini plan: {len(generation_plan['batches'])} batches")
+                print(f"📚 Domain: {generation_plan.get('domain', 'General')}")
             print()
 
+        # If we have a plan, use batch-by-batch generation with topic guidance
+        if generation_plan and "batches" in generation_plan:
+            return await self._generate_with_plan(
+                generation_plan,
+                num_samples,
+                show_progress,
+                checkpoint_dir,
+                checkpoint_interval
+            )
+
+        # Otherwise, use standard chunked generation (no topic guidance)
         while samples_generated < num_samples:
             if not self.cost_tracker.can_continue():
                 logger.warning("Cost limit reached, stopping generation")
@@ -421,6 +450,159 @@ Output (JSON array only):
             print(f"\n{'='*60}")
             print(f"✅ Generation complete!")
             print(f"   Samples generated: {samples_generated}/{num_samples}")
+            print(f"   Failed samples: {len(self.failed_samples)}")
+            print(f"   Total cost: ${self.cost_tracker.total_cost:.2f}")
+            print(f"{'='*60}\n")
+
+        return self.generated_samples[:num_samples]
+
+    async def _generate_with_plan(
+        self,
+        generation_plan: Dict[str, Any],
+        num_samples: int,
+        show_progress: bool,
+        checkpoint_dir: Optional[Any],
+        checkpoint_interval: int
+    ) -> List[DatasetSample]:
+        """
+        Generate samples using batch-level plan with topic guidance.
+
+        This method loops through generation_plan["batches"] and generates
+        each batch with specific topic/subtopic guidance.
+
+        Args:
+            generation_plan: Batch-level plan from GeminiPlanner
+            num_samples: Total samples to generate
+            show_progress: Show progress output
+            checkpoint_dir: Checkpoint directory
+            checkpoint_interval: Checkpoint frequency
+
+        Returns:
+            List of generated samples
+        """
+        batches = generation_plan["batches"]
+        samples_generated = 0
+
+        for batch_spec in batches:
+            if samples_generated >= num_samples:
+                break
+
+            if not self.cost_tracker.can_continue():
+                logger.warning("Cost limit reached, stopping generation")
+                break
+
+            batch_num = batch_spec.get("batch_number", 0)
+            topic = batch_spec.get("topic", "General")
+            subtopic = batch_spec.get("subtopic", "")
+            batch_size = generation_plan.get("batch_size", 20)
+
+            # Adjust batch size for last batch
+            remaining = num_samples - samples_generated
+            actual_batch_size = min(batch_size, remaining)
+
+            if show_progress:
+                print(f"\n📦 Batch {batch_num}/{len(batches)}: {topic} → {subtopic}")
+                print(f"   Generating {actual_batch_size} samples... ", end="", flush=True)
+
+            try:
+                # Generate batch with topic-specific guidance
+                start_time = datetime.now()
+                raw_samples = await self._generate_batch(actual_batch_size, batch_spec)
+                generation_time = (datetime.now() - start_time).total_seconds()
+
+                # Track cost
+                last_cost = self.model_router.get_total_cost() - self.cost_tracker.total_cost
+                if not self.cost_tracker.add_cost(last_cost, operation="generation"):
+                    logger.warning("User stopped generation")
+                    break
+
+                if show_progress:
+                    print(f"✓ Generated (${last_cost:.3f})")
+
+                # Validate samples
+                valid_samples = []
+                for i, raw_sample in enumerate(raw_samples):
+                    if self._validate_sample(raw_sample):
+                        valid_samples.append(raw_sample)
+                    else:
+                        logger.warning(f"Sample {i} failed validation")
+                        self.failed_samples.append({
+                            "sample": raw_sample,
+                            "reason": "validation_failed"
+                        })
+
+                if show_progress:
+                    print(f"   └─ Validated: {len(valid_samples)}/{len(raw_samples)} samples")
+
+                # Batch quality scoring
+                all_quality_scores = []
+                for chunk_start in range(0, len(valid_samples), self.quality_check_batch_size):
+                    chunk_end = min(chunk_start + self.quality_check_batch_size, len(valid_samples))
+                    chunk = valid_samples[chunk_start:chunk_end]
+
+                    if show_progress:
+                        print(f"   └─ Quality check ({len(chunk)} samples)... ", end="", flush=True)
+
+                    chunk_scores = await self._score_quality_batch(chunk)
+                    all_quality_scores.extend(chunk_scores)
+
+                    verify_cost = self.model_router.get_total_cost() - self.cost_tracker.total_cost
+                    if not self.cost_tracker.add_cost(verify_cost, operation="verification"):
+                        break
+
+                    if show_progress:
+                        avg_score = sum(chunk_scores) / len(chunk_scores) if chunk_scores else 0
+                        print(f"✓ Avg: {avg_score:.1f}/10")
+
+                # Create dataset samples from quality-passing samples
+                batch_samples = []
+                for raw_sample, quality_score in zip(valid_samples, all_quality_scores):
+                    if quality_score < self.config.quality_threshold:
+                        logger.info(f"Sample below quality threshold: {quality_score:.1f}")
+                        self.failed_samples.append({
+                            "sample": raw_sample,
+                            "reason": "low_quality",
+                            "score": quality_score
+                        })
+                        continue
+
+                    try:
+                        validated_data = self.data_format(**raw_sample)
+                        metrics = QualityMetrics(
+                            quality_score=quality_score,
+                            token_count=len(json.dumps(raw_sample)) // 4,
+                            generation_cost=last_cost / len(raw_samples),
+                            model_used=self.model_router.generator.model,
+                            generation_time=generation_time / len(raw_samples),
+                            regeneration_count=0
+                        )
+                        batch_samples.append(DatasetSample(data=validated_data, metrics=metrics))
+                    except Exception as e:
+                        logger.error(f"Error creating dataset sample: {e}")
+                        continue
+
+                self.generated_samples.extend(batch_samples)
+                samples_generated += len(batch_samples)
+
+                if show_progress:
+                    print(f"   └─ Accepted: {len(batch_samples)} samples (total: {samples_generated}/{num_samples})")
+
+                # Checkpointing
+                if checkpoint_dir and samples_generated % checkpoint_interval == 0:
+                    self._save_checkpoint(checkpoint_dir, samples_generated, show_progress)
+
+            except Exception as e:
+                logger.error(f"Error generating batch {batch_num}: {e}")
+                continue
+
+        # Final checkpoint
+        if checkpoint_dir and samples_generated > 0:
+            self._save_checkpoint(checkpoint_dir, samples_generated, show_progress, final=True)
+
+        if show_progress:
+            print(f"\n{'='*60}")
+            print(f"✅ Generation complete!")
+            print(f"   Generated samples: {samples_generated}")
             print(f"   Failed samples: {len(self.failed_samples)}")
             print(f"   Total cost: ${self.cost_tracker.total_cost:.2f}")
             print(f"{'='*60}\n")

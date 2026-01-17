@@ -210,50 +210,58 @@ class GeminiPlanner:
         source_content: str,
         total_samples: int,
         data_type: str = "sft",
-        source_files: Optional[List[str]] = None
+        source_files: Optional[List[str]] = None,
+        batch_size: int = 20
     ) -> Dict[str, Any]:
         """
-        Analyze sources and create intelligent generation plan.
+        Analyze sources and create batch-level generation plan.
 
         Args:
             source_content: Combined content from all source documents
             total_samples: Total number of samples to generate
             data_type: Type of training data (sft, dpo, etc.)
             source_files: List of source file names (optional)
+            batch_size: Number of samples per batch (default: 20)
 
         Returns:
             Dictionary with:
             - file_review: Summary of source files
-            - topics: List of 5-50 extracted topics
-            - total_allocated: Total samples (guaranteed to equal total_samples)
+            - batches: List of batch specifications (one per batch of samples)
+            - total_samples: Total samples (equals total_samples parameter)
+            - batch_size: Samples per batch
+            - num_batches: Total number of batches
             - domain: Overall domain/field
         """
-        logger.info(f"Creating generation plan for {total_samples} {data_type.upper()} samples")
+        num_batches = (total_samples + batch_size - 1) // batch_size
+        logger.info(f"Creating batch-level plan for {total_samples} {data_type.upper()} samples")
+        logger.info(f"Plan will have {num_batches} batches of {batch_size} samples each")
         logger.info(f"Analyzing {len(source_content):,} characters of source content")
 
         # Handle large documents with chunking
         if len(source_content) > self.max_chars:
             logger.warning(f"Content exceeds {self.max_chars:,} chars, using chunked analysis")
-            return await self._create_plan_chunked(source_content, total_samples, data_type, source_files)
+            return await self._create_plan_chunked(source_content, total_samples, data_type, source_files, batch_size)
 
         # Single-pass planning for smaller documents
-        return await self._create_plan_single(source_content, total_samples, data_type, source_files)
+        return await self._create_plan_single(source_content, total_samples, data_type, source_files, batch_size)
 
     async def _create_plan_single(
         self,
         source_content: str,
         total_samples: int,
         data_type: str,
-        source_files: Optional[List[str]] = None
+        source_files: Optional[List[str]] = None,
+        batch_size: int = 20
     ) -> Dict[str, Any]:
-        """Create plan with single Gemini API call."""
+        """Create batch-level plan with single Gemini API call."""
 
         file_list = "\n".join([f"  - {f}" for f in source_files]) if source_files else "Multiple source files"
+        num_batches = (total_samples + batch_size - 1) // batch_size  # Ceiling division
 
         planning_prompt = f"""
-You are an expert at analyzing technical documents and creating training data generation plans.
+You are an expert at analyzing technical documents and creating detailed training data generation plans.
 
-TASK: Analyze the source documents below and create a structured plan for generating {total_samples} {data_type.upper()} training samples.
+TASK: Analyze the source documents and create a BATCH-LEVEL plan for generating {total_samples} {data_type.upper()} training samples in batches of {batch_size}.
 
 SOURCE FILES:
 {file_list}
@@ -261,33 +269,51 @@ SOURCE FILES:
 SOURCE CONTENT:
 {source_content[:self.max_chars]}
 
-INSTRUCTIONS:
-1. First, provide a brief review of the source files (1-2 paragraphs summarizing key content areas)
-2. Identify 5-50 key topics/themes from the documents (choose number based on content diversity)
-3. For each topic, provide:
-   - Topic name
-   - Brief description (1 sentence)
-   - Number of samples to generate
-   - Specific guidance for generating questions/prompts for this topic
-4. CRITICAL: Ensure sample counts add up EXACTLY to {total_samples}
-5. Allocate samples based on topic importance and coverage in the source material
+REQUIREMENTS:
+1. Provide a brief review of the source files (1-2 paragraphs)
+2. Create EXACTLY {num_batches} batches (each batch generates {batch_size} samples)
+3. For each batch, specify:
+   - Topic (major theme from the documents)
+   - Subtopic (specific aspect of the topic for this batch)
+   - Detailed generation guidance (what to focus on in these {batch_size} samples)
+   - Relevant source files (which documents contain this content)
+   - Key focus areas (3-5 specific concepts to cover)
+
+STRATEGY:
+- Group related batches under major topics (e.g., batches 1-25 on "Accounts Receivable", batches 26-65 on "Journal Entries")
+- Progress from fundamental to advanced concepts within each topic
+- Ensure diverse subtopics to avoid repetition
+- Reference specific source files that contain relevant content
 
 OUTPUT FORMAT (JSON only, no explanation):
 {{
-  "file_review": "Brief 1-2 paragraph summary of source content, key themes, and areas of focus",
-  "topics": [
+  "file_review": "1-2 paragraph summary of source content and key themes",
+  "domain": "Overall domain/field (e.g., accounting, finance, healthcare)",
+  "total_samples": {total_samples},
+  "batch_size": {batch_size},
+  "num_batches": {num_batches},
+  "batches": [
     {{
-      "name": "Topic Name",
-      "description": "One sentence description",
-      "sample_count": 100,
-      "guidance": "Specific instructions for generating samples about this topic"
+      "batch_number": 1,
+      "topic": "Major Topic Name",
+      "subtopic": "Specific Subtopic for this batch",
+      "guidance": "Detailed instructions: Generate {batch_size} samples focusing on [specific concepts]. Include questions about [X, Y, Z]. Vary difficulty from basic to advanced.",
+      "relevant_files": ["file1.pdf", "file2.pdf"],
+      "focus_areas": ["concept1", "concept2", "concept3"]
+    }},
+    {{
+      "batch_number": 2,
+      "topic": "Major Topic Name",
+      "subtopic": "Different Subtopic",
+      "guidance": "Generate {batch_size} samples about...",
+      "relevant_files": ["file3.pdf"],
+      "focus_areas": ["concept4", "concept5"]
     }}
-  ],
-  "total_allocated": {total_samples},
-  "domain": "Overall domain/field (e.g., accounting, finance, healthcare)"
+    // ... continue for all {num_batches} batches
+  ]
 }}
 
-IMPORTANT: The sum of all sample_count values must equal {total_samples} exactly.
+CRITICAL: You must provide EXACTLY {num_batches} batch entries. The last batch should generate the remaining samples if {total_samples} is not evenly divisible by {batch_size}.
 
 Provide ONLY the JSON output, nothing else.
 """
@@ -305,35 +331,40 @@ Provide ONLY the JSON output, nothing else.
 
             plan = json.loads(plan_text)
 
-            # Validate and fix sample allocation
-            plan = self._validate_and_fix_plan(plan, total_samples)
+            # Validate batch plan
+            plan = self._validate_batch_plan(plan, total_samples, batch_size)
 
-            logger.info(f"✓ Plan created with {len(plan['topics'])} topics")
+            logger.info(f"✓ Plan created with {len(plan['batches'])} batches")
             logger.info(f"✓ File review: {plan['file_review'][:100]}...")
-            for topic in plan["topics"]:
-                logger.info(f"  - {topic['name']}: {topic['sample_count']} samples")
+
+            # Log first few batches as preview
+            for i, batch in enumerate(plan["batches"][:5], 1):
+                logger.info(f"  Batch {batch['batch_number']}: {batch['topic']} → {batch['subtopic']}")
+            if len(plan["batches"]) > 5:
+                logger.info(f"  ... and {len(plan['batches']) - 5} more batches")
 
             return plan
 
         except Exception as e:
             logger.error(f"Error creating plan with Gemini: {e}")
-            logger.warning("Falling back to simple plan")
-            return self._fallback_plan(total_samples, source_files)
+            logger.warning("Falling back to simple batch plan")
+            return self._fallback_batch_plan(total_samples, batch_size, source_files)
 
     async def _create_plan_chunked(
         self,
         source_content: str,
         total_samples: int,
         data_type: str,
-        source_files: Optional[List[str]] = None
+        source_files: Optional[List[str]] = None,
+        batch_size: int = 20
     ) -> Dict[str, Any]:
         """
-        Create plan for large documents using chunked analysis.
+        Create batch-level plan for large documents using chunked analysis.
 
         Strategy:
         1. Summarize each chunk in parallel
         2. Combine summaries
-        3. Create plan from combined summaries
+        3. Create batch plan from combined summaries
         """
         logger.info("Using chunked analysis strategy for large documents")
 
@@ -352,8 +383,8 @@ Provide ONLY the JSON output, nothing else.
         combined_summary = "\n\n".join(summaries)
         logger.info(f"✓ All chunks summarized. Combined: {len(combined_summary):,} characters")
 
-        # Now create plan from summaries
-        return await self._create_plan_single(combined_summary, total_samples, data_type, source_files)
+        # Now create batch plan from summaries
+        return await self._create_plan_single(combined_summary, total_samples, data_type, source_files, batch_size)
 
     async def _summarize_chunk(self, chunk: str, chunk_num: int, total_chunks: int) -> str:
         """
@@ -468,6 +499,110 @@ Keep summary to 3-5 paragraphs maximum.
         logger.info(f"✓ Sample allocation fixed: {final_total} samples")
 
         return plan
+
+    def _validate_batch_plan(
+        self,
+        plan: Dict[str, Any],
+        target_samples: int,
+        batch_size: int
+    ) -> Dict[str, Any]:
+        """
+        Validate batch-level plan.
+
+        Args:
+            plan: Generated batch plan
+            target_samples: Required total samples
+            batch_size: Samples per batch
+
+        Returns:
+            Validated plan
+        """
+        # Ensure required fields
+        if "batches" not in plan or not plan["batches"]:
+            logger.warning("No batches in plan, creating fallback")
+            return self._fallback_batch_plan(target_samples, batch_size)
+
+        if "file_review" not in plan:
+            plan["file_review"] = "Source content analyzed for training data generation."
+
+        # Validate number of batches
+        expected_batches = (target_samples + batch_size - 1) // batch_size
+        actual_batches = len(plan["batches"])
+
+        if actual_batches != expected_batches:
+            logger.warning(
+                f"Batch count mismatch: expected {expected_batches}, got {actual_batches}. "
+                f"Adjusting..."
+            )
+
+            if actual_batches < expected_batches:
+                # Add missing batches (duplicate last batch pattern)
+                last_batch = plan["batches"][-1] if plan["batches"] else {
+                    "batch_number": 1,
+                    "topic": "General Content",
+                    "subtopic": "Additional Coverage",
+                    "guidance": f"Generate {batch_size} diverse samples",
+                    "relevant_files": [],
+                    "focus_areas": []
+                }
+
+                for i in range(actual_batches, expected_batches):
+                    new_batch = last_batch.copy()
+                    new_batch["batch_number"] = i + 1
+                    plan["batches"].append(new_batch)
+
+            elif actual_batches > expected_batches:
+                # Trim excess batches
+                plan["batches"] = plan["batches"][:expected_batches]
+
+        # Ensure batch numbers are sequential
+        for i, batch in enumerate(plan["batches"], 1):
+            batch["batch_number"] = i
+            # Ensure all required fields exist
+            batch.setdefault("topic", "General Content")
+            batch.setdefault("subtopic", f"Batch {i}")
+            batch.setdefault("guidance", f"Generate {batch_size} samples")
+            batch.setdefault("relevant_files", [])
+            batch.setdefault("focus_areas", [])
+
+        # Add metadata
+        plan["total_samples"] = target_samples
+        plan["batch_size"] = batch_size
+        plan["num_batches"] = len(plan["batches"])
+
+        logger.info(f"✓ Batch plan validated: {len(plan['batches'])} batches for {target_samples} samples")
+
+        return plan
+
+    def _fallback_batch_plan(
+        self,
+        total_samples: int,
+        batch_size: int,
+        source_files: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Create simple fallback batch plan when Gemini fails."""
+        num_batches = (total_samples + batch_size - 1) // batch_size
+        file_info = f"Analyzed {len(source_files)} source files" if source_files else "Source content analyzed"
+
+        batches = []
+        for i in range(1, num_batches + 1):
+            batches.append({
+                "batch_number": i,
+                "topic": "General Content",
+                "subtopic": f"Batch {i} Coverage",
+                "guidance": f"Generate {batch_size} diverse samples covering various aspects of the source material",
+                "relevant_files": source_files or [],
+                "focus_areas": ["general coverage", "varied difficulty", "diverse question types"]
+            })
+
+        return {
+            "file_review": f"{file_info} for training data generation. Using general approach across all batches.",
+            "domain": "General",
+            "total_samples": total_samples,
+            "batch_size": batch_size,
+            "num_batches": num_batches,
+            "batches": batches
+        }
 
     def _fallback_plan(self, total_samples: int, source_files: Optional[List[str]] = None) -> Dict[str, Any]:
         """Create simple fallback plan when Gemini fails."""

@@ -82,21 +82,26 @@ class SFTGenerator(BaseGenerator):
         else:
             return "general knowledge"
 
-    async def _generate_batch(self, batch_size: int) -> List[Dict[str, Any]]:
+    async def _generate_batch(
+        self,
+        batch_size: int,
+        batch_spec: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         """
         Generate a batch of SFT samples.
 
         Args:
             batch_size: Number of samples to generate
+            batch_spec: Optional batch specification from generation plan
 
         Returns:
             List of raw sample dictionaries
         """
         # Build generation prompt based on format type
         if self.format_type == "messages":
-            prompt = self._build_messages_prompt(batch_size)
+            prompt = self._build_messages_prompt(batch_size, batch_spec)
         else:
-            prompt = self._build_completion_prompt(batch_size)
+            prompt = self._build_completion_prompt(batch_size, batch_spec)
 
         # Generate batch
         try:
@@ -120,11 +125,115 @@ class SFTGenerator(BaseGenerator):
             logger.error(f"Error generating batch: {e}")
             return []
 
-    def _build_messages_prompt(self, batch_size: int) -> str:
-        """Build prompt for messages format generation."""
+    def _build_messages_prompt(
+        self,
+        batch_size: int,
+        batch_spec: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Build prompt for messages format generation with optional topic guidance."""
         system_prompt = self.system_prompt or self._get_default_system_prompt()
 
-        prompt = f"""
+        # If we have batch_spec, use topic-specific guidance
+        if batch_spec:
+            topic = batch_spec.get("topic", "General Content")
+            subtopic = batch_spec.get("subtopic", "")
+            guidance = batch_spec.get("guidance", "")
+            focus_areas = batch_spec.get("focus_areas", [])
+            relevant_files = batch_spec.get("relevant_files", [])
+
+            # Extract relevant source content (will implement next)
+            source_context = self._extract_relevant_source(relevant_files) if relevant_files else self.source_content
+
+            focus_list = "\n".join([f"- {area}" for area in focus_areas]) if focus_areas else ""
+
+            prompt = f"""
+You are an expert at generating high-quality training data for fine-tuning language models.
+
+=== GENERATION TASK ===
+
+DATA TYPE: SFT (Supervised Fine-Tuning)
+FORMAT: Messages (system/user/assistant)
+BATCH SIZE: {batch_size} samples
+
+=== TOPIC CONTEXT ===
+
+MAJOR TOPIC: {topic}
+SUBTOPIC: {subtopic}
+
+FOCUS AREAS:
+{focus_list}
+
+GENERATION GUIDANCE:
+{guidance}
+
+=== SOURCE MATERIAL ===
+
+RELEVANT DOCUMENTS: {", ".join(relevant_files) if relevant_files else "All source documents"}
+
+**IMPORTANT:** Use the source content below as your PRIMARY inspiration. Extract:
+- Topics and themes directly from the source material
+- Specific examples, scenarios, and calculations from the documents
+- Terminology, definitions, and concepts as written in the sources
+- Real-world applications and use cases mentioned in the sources
+
+SOURCE CONTENT:
+{source_context[:4000] if source_context else "No source content provided - generate from general knowledge."}
+
+=== GENERATION REQUIREMENTS ===
+
+1. **FORMAT TYPE: SFT (Supervised Fine-Tuning) - Messages Format**
+   Each sample must have "messages" array with system/user/assistant roles
+
+2. Generate EXACTLY {batch_size} samples in this exact structure:
+
+EXAMPLE FORMAT:
+{{
+  "messages": [
+    {{
+      "role": "system",
+      "content": "{system_prompt}"
+    }},
+    {{
+      "role": "user",
+      "content": "What is the journal entry to record bad debt expense using the allowance method?"
+    }},
+    {{
+      "role": "assistant",
+      "content": "The journal entry to record bad debt expense using the allowance method is:\\n\\nDR Bad Debt Expense    $X\\n   CR Allowance for Doubtful Accounts    $X\\n\\nThis entry:\\n1. Records the estimated uncollectible accounts\\n2. Matches the expense to the period when revenue was recognized (matching principle)\\n3. Reduces accounts receivable to net realizable value\\n\\nThe allowance method is preferred under GAAP because it follows the matching principle, unlike the direct write-off method which violates matching."
+    }}
+  ]
+}}
+
+3. **CRITICAL - CONTENT SOURCE**:
+   - Pull questions, examples, and scenarios DIRECTLY from the source material above
+   - Use exact terminology, definitions, and concepts from the sources
+   - Base numerical examples on calculations shown in the source documents
+   - Reference specific methods, procedures, and standards mentioned in sources
+
+4. **TOPIC FOCUS**: All samples MUST be about "{topic} → {subtopic}"
+   - Use the FOCUS AREAS as specific concepts to cover:
+{focus_list}
+
+5. **DIFFICULTY DISTRIBUTION**:
+   - Samples 1-{batch_size//3}: Basic (definitions, simple concepts)
+   - Samples {batch_size//3+1}-{2*batch_size//3}: Intermediate (calculations, procedures)
+   - Samples {2*batch_size//3+1}-{batch_size}: Advanced (complex scenarios, analysis)
+
+6. **QUESTION VARIETY**:
+   - Conceptual, Calculation, Procedural, Analysis, Application questions
+   - Mix formats: definitions, comparisons, step-by-step, problem-solving
+
+7. **RESPONSE QUALITY**:
+   - Detailed and educational (not just brief answers)
+   - Include examples, formulas, journal entries when relevant
+   - Explain the "why" not just the "what"
+
+OUTPUT: JSON array with EXACTLY {batch_size} objects in the format shown above.
+Provide ONLY the JSON array, no other text.
+"""
+        else:
+            # Fallback to generic prompt if no batch_spec
+            prompt = f"""
 Generate {batch_size} diverse, high-quality training examples for supervised fine-tuning.
 
 **Domain:** {self.domain_context}
@@ -159,9 +268,100 @@ Return ONLY the JSON array, no other text.
 """
         return prompt
 
-    def _build_completion_prompt(self, batch_size: int) -> str:
-        """Build prompt for completion format generation."""
-        prompt = f"""
+    def _extract_relevant_source(self, relevant_files: List[str]) -> str:
+        """
+        Extract ONLY relevant source content based on file names.
+
+        Args:
+            relevant_files: List of relevant source file names from batch_spec
+
+        Returns:
+            Combined content from ONLY the specified files
+        """
+        if not relevant_files or not self.source_content_by_file:
+            # Fallback: return all content if no per-file mapping
+            return self.source_content
+
+        # Extract content from ONLY the specified files
+        relevant_content = []
+        for file_path in relevant_files:
+            # Try to match by filename (handle both full paths and just filenames)
+            matched = False
+            for stored_key, content in self.source_content_by_file.items():
+                # Match if stored_key ends with the file_path (handles both cases)
+                if stored_key.endswith(file_path) or file_path.endswith(stored_key):
+                    relevant_content.append(f"\n\n=== {file_path} ===\n\n{content}")
+                    matched = True
+                    break
+
+            if not matched:
+                logger.warning(f"Could not find content for file: {file_path}")
+
+        if not relevant_content:
+            logger.warning(f"No matching files found for {relevant_files}, using all content")
+            return self.source_content
+
+        combined = "\n\n".join(relevant_content)
+        logger.debug(f"Extracted {len(combined)} chars from {len(relevant_content)} relevant files")
+        return combined
+
+    def _build_completion_prompt(
+        self,
+        batch_size: int,
+        batch_spec: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Build prompt for completion format generation with optional topic guidance."""
+        # Similar structure to messages prompt, but for completion format
+        if batch_spec:
+            topic = batch_spec.get("topic", "General Content")
+            subtopic = batch_spec.get("subtopic", "")
+            guidance = batch_spec.get("guidance", "")
+            focus_areas = batch_spec.get("focus_areas", [])
+            relevant_files = batch_spec.get("relevant_files", [])
+
+            source_context = self._extract_relevant_source(relevant_files) if relevant_files else self.source_content
+            focus_list = "\n".join([f"- {area}" for area in focus_areas]) if focus_areas else ""
+
+            prompt = f"""
+Generate {batch_size} high-quality SFT training examples (completion format).
+
+=== TOPIC CONTEXT ===
+MAJOR TOPIC: {topic}
+SUBTOPIC: {subtopic}
+FOCUS AREAS: {focus_list}
+GUIDANCE: {guidance}
+
+=== SOURCE MATERIAL ===
+RELEVANT DOCUMENTS: {", ".join(relevant_files) if relevant_files else "All documents"}
+
+**IMPORTANT:** Use source content as PRIMARY inspiration - extract topics, examples, calculations, and terminology directly from the material below.
+
+SOURCE CONTENT:
+{source_context[:4000] if source_context else "No source content."}
+
+=== REQUIREMENTS ===
+
+1. **FORMAT TYPE: SFT (Supervised Fine-Tuning) - Completion Format**
+   Each sample has "prompt" and "completion" fields
+
+2. EXAMPLE FORMAT:
+{{
+  "prompt": "Question: What is the journal entry for bad debt expense using the allowance method?",
+  "completion": "DR Bad Debt Expense $X\\n   CR Allowance for Doubtful Accounts $X\\n\\nThis records estimated uncollectible accounts and follows the matching principle."
+}}
+
+3. **CONTENT SOURCE**: Pull questions/examples DIRECTLY from source material above
+
+4. Generate EXACTLY {batch_size} samples about "{topic} → {subtopic}"
+
+5. Difficulty: {batch_size//3} basic, {batch_size//3} intermediate, {batch_size//3} advanced
+
+Return JSON array: [{{"prompt": "...", "completion": "..."}}, ...]
+ONLY JSON, no other text.
+"""
+        else:
+            # Fallback to generic prompt if no batch_spec
+            prompt = f"""
 Generate {batch_size} diverse, high-quality training examples for supervised fine-tuning.
 
 **Domain:** {self.domain_context}
