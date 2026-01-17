@@ -39,6 +39,7 @@ class BaseGenerator(ABC):
         cost_tracker: CostTracker,
         config: GenerationConfig,
         source_content: Optional[str] = None,
+        source_content_by_file: Optional[Dict[str, str]] = None,
         max_retries: int = 10,
         quality_check_batch_size: int = 50
     ):
@@ -49,7 +50,8 @@ class BaseGenerator(ABC):
             model_router: Router for different model tasks
             cost_tracker: Cost tracking system
             config: Generation configuration
-            source_content: Source material for generation context
+            source_content: Combined source material for generation context
+            source_content_by_file: Per-file source content mapping (filename -> content)
             max_retries: Maximum retry attempts for failed samples
             quality_check_batch_size: Number of samples to check per API call
         """
@@ -57,6 +59,7 @@ class BaseGenerator(ABC):
         self.cost_tracker = cost_tracker
         self.config = config
         self.source_content = source_content or ""
+        self.source_content_by_file = source_content_by_file or {}
         self.max_retries = max_retries
         self.quality_check_batch_size = quality_check_batch_size
 

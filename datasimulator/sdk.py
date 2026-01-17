@@ -274,8 +274,11 @@ class DataSimulator:
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
             logger.info(f"Checkpointing enabled: {self.checkpoint_dir} (every {checkpoint_interval} samples)")
 
-        # Load source content if provided
-        self.source_content = self._load_source() if source else None
+        # Load source content if provided (both combined and per-file)
+        self.source_content = None
+        self.source_content_by_file = {}  # NEW: Per-file content mapping
+        if source:
+            self.source_content, self.source_content_by_file = self._load_source()
 
         # Setup models
         model_config = models or {}
@@ -318,9 +321,14 @@ class DataSimulator:
         logger.info(f"Generator: {generator_model}")
         logger.info(f"Verifier: {verifier_model}")
 
-    def _load_source(self) -> str:
+    def _load_source(self) -> tuple[str, Dict[str, str]]:
         """
         Load source content from file(s) or URL(s).
+
+        Returns:
+            Tuple of (combined_content, content_by_file)
+            - combined_content: All sources combined into one string
+            - content_by_file: Dict mapping file path to its content
 
         Supports:
         - Single source: string path/URL
@@ -333,13 +341,14 @@ class DataSimulator:
         - Google Docs (URLs or IDs)
         """
         if not self.source:
-            return ""
+            return "", {}
 
         # Handle multiple sources
         sources = [self.source] if isinstance(self.source, str) else self.source
 
         logger.info(f"Loading {len(sources)} source(s)...")
         combined_content = []
+        content_by_file = {}  # NEW: Store content per file
         successful_loads = 0
 
         for i, source in enumerate(sources, 1):
@@ -357,6 +366,10 @@ class DataSimulator:
                     f"(type: {metadata.get('method', 'unknown')})"
                 )
 
+                # Store per-file content (use filename as key)
+                file_key = Path(source).name if "/" in source or "\\" in source else source
+                content_by_file[file_key] = content
+
                 # Add source separator for multiple files
                 if len(sources) > 1:
                     combined_content.append(f"\n\n=== Source {i}: {source} ===\n\n{content}")
@@ -372,7 +385,7 @@ class DataSimulator:
 
         if successful_loads == 0:
             logger.warning("Failed to load any sources, continuing without source content")
-            return ""
+            return "", {}
 
         full_content = "\n\n".join(combined_content)
         logger.info(
@@ -380,7 +393,7 @@ class DataSimulator:
             f"({len(full_content)} total characters)"
         )
 
-        return full_content
+        return full_content, content_by_file
 
     def generate(
         self,
@@ -435,7 +448,8 @@ class DataSimulator:
                 model_router=self.model_router,
                 cost_tracker=self.cost_tracker,
                 config=config,
-                source_content=self.source_content
+                source_content=self.source_content,
+                source_content_by_file=self.source_content_by_file
             )
         elif self.data_type == "dpo":
             generator = DPOGenerator(
@@ -444,7 +458,8 @@ class DataSimulator:
                 model_router=self.model_router,
                 cost_tracker=self.cost_tracker,
                 config=config,
-                source_content=self.source_content
+                source_content=self.source_content,
+                source_content_by_file=self.source_content_by_file
             )
         elif self.data_type == "verifiable_qa":
             generator = VerifiableQAGenerator(
@@ -452,7 +467,8 @@ class DataSimulator:
                 model_router=self.model_router,
                 cost_tracker=self.cost_tracker,
                 config=config,
-                source_content=self.source_content
+                source_content=self.source_content,
+                source_content_by_file=self.source_content_by_file
             )
         else:
             raise ValueError(

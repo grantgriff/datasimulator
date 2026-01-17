@@ -170,67 +170,66 @@ GENERATION GUIDANCE:
 
 RELEVANT DOCUMENTS: {", ".join(relevant_files) if relevant_files else "All source documents"}
 
-SOURCE CONTENT (use as factual basis for your examples):
+**IMPORTANT:** Use the source content below as your PRIMARY inspiration. Extract:
+- Topics and themes directly from the source material
+- Specific examples, scenarios, and calculations from the documents
+- Terminology, definitions, and concepts as written in the sources
+- Real-world applications and use cases mentioned in the sources
+
+SOURCE CONTENT:
 {source_context[:4000] if source_context else "No source content provided - generate from general knowledge."}
 
 === GENERATION REQUIREMENTS ===
 
-1. Generate EXACTLY {batch_size} SFT training samples
-2. Each sample must include:
-   - system: Role description for the AI assistant
-   - user: A question or instruction
-   - assistant: A detailed, accurate response
+1. **FORMAT TYPE: SFT (Supervised Fine-Tuning) - Messages Format**
+   Each sample must have "messages" array with system/user/assistant roles
 
-3. **CRITICAL**: All samples MUST focus on the topic/subtopic above
-   - Topic: {topic}
-   - Subtopic: {subtopic}
-   - Do NOT generate samples about other topics
+2. Generate EXACTLY {batch_size} samples in this exact structure:
 
-4. Use the FOCUS AREAS as your guide:
+EXAMPLE FORMAT:
+{{
+  "messages": [
+    {{
+      "role": "system",
+      "content": "{system_prompt}"
+    }},
+    {{
+      "role": "user",
+      "content": "What is the journal entry to record bad debt expense using the allowance method?"
+    }},
+    {{
+      "role": "assistant",
+      "content": "The journal entry to record bad debt expense using the allowance method is:\\n\\nDR Bad Debt Expense    $X\\n   CR Allowance for Doubtful Accounts    $X\\n\\nThis entry:\\n1. Records the estimated uncollectible accounts\\n2. Matches the expense to the period when revenue was recognized (matching principle)\\n3. Reduces accounts receivable to net realizable value\\n\\nThe allowance method is preferred under GAAP because it follows the matching principle, unlike the direct write-off method which violates matching."
+    }}
+  ]
+}}
+
+3. **CRITICAL - CONTENT SOURCE**:
+   - Pull questions, examples, and scenarios DIRECTLY from the source material above
+   - Use exact terminology, definitions, and concepts from the sources
+   - Base numerical examples on calculations shown in the source documents
+   - Reference specific methods, procedures, and standards mentioned in sources
+
+4. **TOPIC FOCUS**: All samples MUST be about "{topic} → {subtopic}"
+   - Use the FOCUS AREAS as specific concepts to cover:
 {focus_list}
 
-5. Vary the difficulty across the {batch_size} samples:
-   - Samples 1-{batch_size//3}: Basic/foundational (definitions, concepts, simple examples)
-   - Samples {batch_size//3+1}-{2*batch_size//3}: Intermediate (calculations, procedures, method comparisons)
-   - Samples {2*batch_size//3+1}-{batch_size}: Advanced (complex scenarios, multi-step problems, analysis)
+5. **DIFFICULTY DISTRIBUTION**:
+   - Samples 1-{batch_size//3}: Basic (definitions, simple concepts)
+   - Samples {batch_size//3+1}-{2*batch_size//3}: Intermediate (calculations, procedures)
+   - Samples {2*batch_size//3+1}-{batch_size}: Advanced (complex scenarios, analysis)
 
-6. Vary the question types:
-   - Conceptual: "What is...?", "Explain..."
-   - Calculation: "Calculate...", "Compute..."
-   - Procedural: "How do you...?", "What are the steps to...?"
-   - Analysis: "Compare...", "Explain why..."
-   - Application: "Given this scenario..."
+6. **QUESTION VARIETY**:
+   - Conceptual, Calculation, Procedural, Analysis, Application questions
+   - Mix formats: definitions, comparisons, step-by-step, problem-solving
 
-7. Ensure all information is accurate and based on the source material provided
+7. **RESPONSE QUALITY**:
+   - Detailed and educational (not just brief answers)
+   - Include examples, formulas, journal entries when relevant
+   - Explain the "why" not just the "what"
 
-8. Make responses detailed and educational (not just brief answers)
-
-9. Use appropriate system prompts like: "{system_prompt}"
-
-OUTPUT FORMAT (JSON only):
-Return a JSON array with EXACTLY {batch_size} objects in this format:
-
-[
-  {{
-    "messages": [
-      {{
-        "role": "system",
-        "content": "You are an expert in {topic.lower()}..."
-      }},
-      {{
-        "role": "user",
-        "content": "Question or instruction here"
-      }},
-      {{
-        "role": "assistant",
-        "content": "Detailed, accurate response here..."
-      }}
-    ]
-  }},
-  ... {batch_size - 1} more samples ...
-]
-
-CRITICAL: Provide ONLY the JSON array. No introduction, no explanation, just the JSON.
+OUTPUT: JSON array with EXACTLY {batch_size} objects in the format shown above.
+Provide ONLY the JSON array, no other text.
 """
         else:
             # Fallback to generic prompt if no batch_spec
@@ -271,25 +270,40 @@ Return ONLY the JSON array, no other text.
 
     def _extract_relevant_source(self, relevant_files: List[str]) -> str:
         """
-        Extract relevant portions of source content based on file names.
-
-        For now, returns all source content. In future, could:
-        - Store per-file content mapping
-        - Extract only sections from specified files
-        - Use RAG/embeddings to find relevant sections
+        Extract ONLY relevant source content based on file names.
 
         Args:
-            relevant_files: List of relevant source file names
+            relevant_files: List of relevant source file names from batch_spec
 
         Returns:
-            Extracted source content
+            Combined content from ONLY the specified files
         """
-        # TODO: Implement per-file extraction
-        # For now, return all source content
-        # In a future enhancement, we could:
-        # 1. Store content per file during loading
-        # 2. Only return content from files in relevant_files list
-        return self.source_content
+        if not relevant_files or not self.source_content_by_file:
+            # Fallback: return all content if no per-file mapping
+            return self.source_content
+
+        # Extract content from ONLY the specified files
+        relevant_content = []
+        for file_path in relevant_files:
+            # Try to match by filename (handle both full paths and just filenames)
+            matched = False
+            for stored_key, content in self.source_content_by_file.items():
+                # Match if stored_key ends with the file_path (handles both cases)
+                if stored_key.endswith(file_path) or file_path.endswith(stored_key):
+                    relevant_content.append(f"\n\n=== {file_path} ===\n\n{content}")
+                    matched = True
+                    break
+
+            if not matched:
+                logger.warning(f"Could not find content for file: {file_path}")
+
+        if not relevant_content:
+            logger.warning(f"No matching files found for {relevant_files}, using all content")
+            return self.source_content
+
+        combined = "\n\n".join(relevant_content)
+        logger.debug(f"Extracted {len(combined)} chars from {len(relevant_content)} relevant files")
+        return combined
 
     def _build_completion_prompt(
         self,
@@ -311,30 +325,38 @@ Return ONLY the JSON array, no other text.
             prompt = f"""
 Generate {batch_size} high-quality SFT training examples (completion format).
 
-TOPIC: {topic}
+=== TOPIC CONTEXT ===
+MAJOR TOPIC: {topic}
 SUBTOPIC: {subtopic}
-
-FOCUS AREAS:
-{focus_list}
-
+FOCUS AREAS: {focus_list}
 GUIDANCE: {guidance}
+
+=== SOURCE MATERIAL ===
+RELEVANT DOCUMENTS: {", ".join(relevant_files) if relevant_files else "All documents"}
+
+**IMPORTANT:** Use source content as PRIMARY inspiration - extract topics, examples, calculations, and terminology directly from the material below.
 
 SOURCE CONTENT:
 {source_context[:4000] if source_context else "No source content."}
 
-REQUIREMENTS:
-1. Generate EXACTLY {batch_size} samples about {topic} → {subtopic}
-2. Each sample has "prompt" and "completion" fields
-3. Use focus areas as guide
-4. Vary difficulty: {batch_size//3} easy, {batch_size//3} medium, {batch_size//3} hard
-5. Ensure accuracy based on source material
+=== REQUIREMENTS ===
 
-Return JSON array of {batch_size} examples:
-[
-  {{"prompt": "Question: ...", "completion": "..."}},
-  ...
-]
+1. **FORMAT TYPE: SFT (Supervised Fine-Tuning) - Completion Format**
+   Each sample has "prompt" and "completion" fields
 
+2. EXAMPLE FORMAT:
+{{
+  "prompt": "Question: What is the journal entry for bad debt expense using the allowance method?",
+  "completion": "DR Bad Debt Expense $X\\n   CR Allowance for Doubtful Accounts $X\\n\\nThis records estimated uncollectible accounts and follows the matching principle."
+}}
+
+3. **CONTENT SOURCE**: Pull questions/examples DIRECTLY from source material above
+
+4. Generate EXACTLY {batch_size} samples about "{topic} → {subtopic}"
+
+5. Difficulty: {batch_size//3} basic, {batch_size//3} intermediate, {batch_size//3} advanced
+
+Return JSON array: [{{"prompt": "...", "completion": "..."}}, ...]
 ONLY JSON, no other text.
 """
         else:
