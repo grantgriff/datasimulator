@@ -51,3 +51,7 @@ cache/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Local test scripts (not part of SDK)
+test_quick.py
+test_with_custom_paths.py
