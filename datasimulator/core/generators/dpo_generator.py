@@ -111,7 +111,7 @@ class DPOGenerator(BaseGenerator):
             response = await self.model_router.generate(
                 prompt,
                 temperature=0.9,  # Higher temp for diverse responses
-                max_tokens=4096 * (batch_size // 10 + 1)
+                max_tokens=batch_size * 600  # ~600 tokens per sample
             )
 
             # Parse JSON response
