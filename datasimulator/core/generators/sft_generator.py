@@ -229,12 +229,11 @@ EXAMPLE FORMAT:
    - Explain the "why" not just the "what"
 
 8. **RESPONSE LENGTH AND DETAIL REQUIREMENTS**:
-   - Each assistant response should be DETAILED and COMPREHENSIVE (250-500 words typical)
-   - Include multiple examples, calculations, and scenarios
-   - Provide step-by-step explanations with specific numbers
-   - Reference relevant standards, principles, and best practices
-   - Include journal entries, formulas, and specific dollar amounts where applicable
-   - Add context about when/why/how concepts apply in practice
+   - Each assistant response should be CONCISE but COMPREHENSIVE (150-250 words typical)
+   - Focus on key points with specific examples
+   - Include essential calculations and formulas
+   - Reference relevant standards when applicable
+   - Be thorough but avoid unnecessary elaboration
 
    FEW-SHOT EXAMPLES OF APPROPRIATE DETAIL LEVEL:
 

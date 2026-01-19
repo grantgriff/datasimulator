@@ -191,7 +191,7 @@ EXAMPLE 2:
   "rejected": "Tangible assets are things like equipment and buildings that you depreciate. Intangible assets are things like patents that don't depreciate."
 }}
 
-Your responses should match this level of detail - the 'chosen' response should be comprehensive with examples, calculations, and references, while the 'rejected' response should be incomplete, oversimplified, or missing key details.
+Your responses should match this level of detail - the 'chosen' response should be CONCISE but comprehensive with key examples and calculations (150-250 words), while the 'rejected' response should be incomplete, oversimplified, or missing key details.
 
 4. **CONTENT SOURCE**: Pull questions/examples DIRECTLY from source material above
 
