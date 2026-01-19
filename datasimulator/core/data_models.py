@@ -231,7 +231,7 @@ class ModelConfig(BaseModel):
 class GenerationConfig(BaseModel):
     """Configuration for data generation."""
     num_samples: int = Field(ge=1)
-    batch_size: int = Field(default=10, ge=1, le=50)
+    batch_size: int = Field(default=20, ge=1, le=50)
     quality_threshold: float = Field(default=6.0, ge=1.0, le=10.0)
     diversity_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
     max_cost: float = Field(default=20.0, ge=0.0)
