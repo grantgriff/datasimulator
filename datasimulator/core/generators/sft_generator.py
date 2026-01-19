@@ -229,32 +229,53 @@ EXAMPLE FORMAT:
    - Explain the "why" not just the "what"
 
 8. **RESPONSE LENGTH AND DETAIL REQUIREMENTS**:
-   - Each assistant response should be DETAILED and COMPREHENSIVE (300-600 words typical)
+   - Each assistant response should be DETAILED and COMPREHENSIVE (250-500 words typical)
    - Include multiple examples, calculations, and scenarios
    - Provide step-by-step explanations with specific numbers
    - Reference relevant standards, principles, and best practices
    - Include journal entries, formulas, and specific dollar amounts where applicable
    - Add context about when/why/how concepts apply in practice
 
-   EXAMPLE OF APPROPRIATE DETAIL LEVEL:
-   "Should my allowance percentage be higher during a recession?"
+   FEW-SHOT EXAMPLES OF APPROPRIATE DETAIL LEVEL:
 
-   Good response would include:
-   - Yes/no with reasoning (2-3 sentences)
-   - Typical adjustment range (+0.5% to +1.5%)
-   - Specific calculation example with dollar amounts
-   - Journal entry for the adjustment
-   - Factors affecting the increase (industry, customer base, geography, duration)
-   - Historical analysis (2008-2009 recession example)
-   - Leading vs lagging indicators
-   - Quarterly monitoring approach with examples
-   - Aging schedule impact with specific percentages
-   - Industry benchmark comparison
-   - Disclosure example
-   - Post-recession guidance
-   - Technical references (ASC 310-10-35, SEC SAB 102)
+   EXAMPLE 1:
+   User: "I bought a $35,000 piece of equipment for my manufacturing business. Should I use Section 179 or depreciate it over time?"
 
-   Your responses should match this level of comprehensive detail with real calculations and examples.
+   Assistant: "Section 179 allows you to deduct the full $35,000 immediately in 2024, giving you the largest first-year tax benefit. You must have at least $35,000 in taxable business income to claim the full deduction.
+
+Alternatives:
+1. Section 179: Deduct $35,000 now (requires sufficient income)
+2. Bonus Depreciation: Deduct 60% ($21,000) in 2024, depreciate remaining $14,000 over 5-7 years
+3. Regular MACRS: Spread $35,000 over 5-7 years using accelerated depreciation
+
+Recommendation: Use Section 179 if you have the income for maximum immediate tax savings. If your income is lower this year but expected to rise, consider regular depreciation to spread deductions over future years.
+
+See IRS Publication 946, Chapter 2 for Section 179 rules and Chapter 4 for MACRS depreciation."
+
+   EXAMPLE 2:
+   User: "What is the difference between tangible and intangible property for depreciation purposes?"
+
+   Assistant: "Tangible property is physical property you can touch. Intangible property is non-physical property with value.
+
+Tangible Property (depreciable):
+- Equipment, machinery, vehicles
+- Buildings and structures
+- Furniture, computers, tools
+- Depreciated under MACRS over 3, 5, 7, 15, 27.5, or 39 years
+
+Intangible Property (amortizable):
+- Patents, copyrights, trademarks
+- Goodwill (from business acquisitions)
+- Software and licenses
+- Generally amortized over 15 years under Section 197
+
+Example: A $10,000 computer system is tangible (5-year MACRS). A $10,000 software license is intangible (amortized over 36 months).
+
+Note: Section 179 covers both tangible property and certain software purchases.
+
+See IRS Publication 946 for tangible property and IRS Publication 535, Chapter 8 for intangible property."
+
+   Your responses should match this level of comprehensive detail with real calculations, examples, and references.
 
 OUTPUT: JSON array with EXACTLY {batch_size} objects in the format shown above.
 Provide ONLY the JSON array, no other text.

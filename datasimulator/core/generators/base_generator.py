@@ -581,6 +581,113 @@ Output (JSON array only):
                         logger.error(f"Error creating dataset sample: {e}")
                         continue
 
+                # Smart regeneration: only regenerate failed samples
+                regeneration_attempt = 0
+                while len(batch_samples) < actual_batch_size and regeneration_attempt < self.max_retries:
+                    samples_needed = actual_batch_size - len(batch_samples)
+                    regeneration_attempt += 1
+
+                    if show_progress:
+                        print(f"   └─ Regenerating {samples_needed} failed samples (attempt {regeneration_attempt}/{self.max_retries})... ", end="", flush=True)
+
+                    try:
+                        # Generate only the missing samples with same batch_spec
+                        regen_start_time = datetime.now()
+                        regen_raw_samples = await self._generate_batch(samples_needed, batch_spec)
+                        regen_generation_time = (datetime.now() - regen_start_time).total_seconds()
+
+                        # Track regeneration cost
+                        regen_cost = self.model_router.get_total_cost() - self.cost_tracker.total_cost
+                        if not self.cost_tracker.add_cost(regen_cost, operation="regeneration"):
+                            logger.warning("Cost limit reached during regeneration")
+                            break
+
+                        if show_progress:
+                            print(f"✓ (${regen_cost:.3f})")
+
+                        # Validate regenerated samples
+                        regen_valid_samples = []
+                        for i, raw_sample in enumerate(regen_raw_samples):
+                            if self._validate_sample(raw_sample):
+                                regen_valid_samples.append(raw_sample)
+                            else:
+                                logger.warning(f"Regenerated sample {i} failed validation")
+                                self.failed_samples.append({
+                                    "sample": raw_sample,
+                                    "reason": "validation_failed",
+                                    "regeneration_attempt": regeneration_attempt
+                                })
+
+                        if show_progress:
+                            print(f"   └─ Validated: {len(regen_valid_samples)}/{len(regen_raw_samples)} regenerated samples")
+
+                        # Batch quality scoring for regenerated samples
+                        regen_quality_scores = []
+                        for chunk_start in range(0, len(regen_valid_samples), self.quality_check_batch_size):
+                            chunk_end = min(chunk_start + self.quality_check_batch_size, len(regen_valid_samples))
+                            chunk = regen_valid_samples[chunk_start:chunk_end]
+
+                            if show_progress:
+                                print(f"   └─ Quality check ({len(chunk)} regenerated samples)... ", end="", flush=True)
+
+                            chunk_scores = await self._score_quality_batch(chunk)
+                            regen_quality_scores.extend(chunk_scores)
+
+                            verify_cost = self.model_router.get_total_cost() - self.cost_tracker.total_cost
+                            if not self.cost_tracker.add_cost(verify_cost, operation="verification"):
+                                break
+
+                            if show_progress:
+                                avg_score = sum(chunk_scores) / len(chunk_scores) if chunk_scores else 0
+                                print(f"✓ Avg: {avg_score:.1f}/10")
+
+                        # Add passing regenerated samples to batch
+                        regen_passed = 0
+                        for raw_sample, quality_score in zip(regen_valid_samples, regen_quality_scores):
+                            if quality_score < self.config.quality_threshold:
+                                logger.info(f"Regenerated sample below quality threshold: {quality_score:.1f}")
+                                self.failed_samples.append({
+                                    "sample": raw_sample,
+                                    "reason": "low_quality",
+                                    "score": quality_score,
+                                    "regeneration_attempt": regeneration_attempt
+                                })
+                                continue
+
+                            try:
+                                validated_data = self.data_format(**raw_sample)
+                                metrics = QualityMetrics(
+                                    quality_score=quality_score,
+                                    token_count=len(json.dumps(raw_sample)) // 4,
+                                    generation_cost=regen_cost / len(regen_raw_samples),
+                                    model_used=self.model_router.generator.model,
+                                    generation_time=regen_generation_time / len(regen_raw_samples),
+                                    regeneration_count=regeneration_attempt
+                                )
+                                batch_samples.append(DatasetSample(data=validated_data, metrics=metrics))
+                                regen_passed += 1
+                            except Exception as e:
+                                logger.error(f"Error creating regenerated dataset sample: {e}")
+                                continue
+
+                        if show_progress:
+                            print(f"   └─ Accepted: {regen_passed} regenerated samples")
+
+                        # If we got no passing samples this attempt, no point continuing
+                        if regen_passed == 0:
+                            logger.warning(f"No passing samples in regeneration attempt {regeneration_attempt}, stopping regeneration")
+                            break
+
+                    except Exception as e:
+                        logger.error(f"Error during regeneration attempt {regeneration_attempt}: {e}")
+                        break
+
+                if len(batch_samples) < actual_batch_size:
+                    shortfall = actual_batch_size - len(batch_samples)
+                    logger.warning(f"Batch incomplete: {len(batch_samples)}/{actual_batch_size} samples (short by {shortfall})")
+                    if show_progress:
+                        print(f"   ⚠️  Batch incomplete: {len(batch_samples)}/{actual_batch_size} samples")
+
                 self.generated_samples.extend(batch_samples)
                 samples_generated += len(batch_samples)
 
