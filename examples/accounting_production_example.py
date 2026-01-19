@@ -101,8 +101,8 @@ def main():
 
         # Model configuration
         models={
-            "generator": "claude-3-5-sonnet-20241022",  # Main generator
-            "verifier": "gpt-4o-mini",                   # Quality scoring
+            "generator": "claude-sonnet-4-5-20250929",  # Main generator
+            "verifier": "gpt-4o-mini-2024-07-18",       # Quality scoring
         },
 
         # Quality settings

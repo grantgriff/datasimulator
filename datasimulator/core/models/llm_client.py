@@ -319,9 +319,9 @@ class ModelRouter:
 
     def __init__(
         self,
-        generator_model: str = "claude-3-5-sonnet-20241022",
-        verifier_model: str = "gpt-4o-mini",
-        diversity_model: str = "qwen2.5:7b",
+        generator_model: str = "claude-sonnet-4-5-20250929",
+        verifier_model: str = "gpt-4o-mini-2024-07-18",
+        diversity_model: str = "gpt-4o-mini-2024-07-18",
         **api_keys
     ):
         self.generator = UnifiedLLMClient(generator_model, **api_keys)
