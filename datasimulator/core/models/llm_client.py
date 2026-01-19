@@ -81,21 +81,49 @@ class ClaudeClient(BaseLLMClient):
         max_tokens: int = 4096,
         **kwargs
     ) -> str:
-        """Generate text using Claude."""
+        """Generate text using Claude with streaming for large requests."""
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                messages=[{"role": "user", "content": prompt}],
-                **kwargs
-            )
+            # Use streaming for requests with high max_tokens (>10k)
+            if max_tokens > 10000:
+                full_response = ""
+                input_tokens = 0
+                output_tokens = 0
 
-            # Track token usage
-            self.last_input_tokens = response.usage.input_tokens
-            self.last_output_tokens = response.usage.output_tokens
+                async with self.client.messages.stream(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    messages=[{"role": "user", "content": prompt}],
+                    **kwargs
+                ) as stream:
+                    async for text in stream.text_stream:
+                        full_response += text
 
-            return response.content[0].text
+                    # Get final message for token usage
+                    final_message = await stream.get_final_message()
+                    input_tokens = final_message.usage.input_tokens
+                    output_tokens = final_message.usage.output_tokens
+
+                # Track token usage
+                self.last_input_tokens = input_tokens
+                self.last_output_tokens = output_tokens
+
+                return full_response
+            else:
+                # Use non-streaming for smaller requests
+                response = await self.client.messages.create(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    messages=[{"role": "user", "content": prompt}],
+                    **kwargs
+                )
+
+                # Track token usage
+                self.last_input_tokens = response.usage.input_tokens
+                self.last_output_tokens = response.usage.output_tokens
+
+                return response.content[0].text
 
         except Exception as e:
             logger.error(f"Claude API error: {e}")
