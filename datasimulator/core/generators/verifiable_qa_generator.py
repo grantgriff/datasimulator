@@ -8,7 +8,7 @@ Ideal for tasks with objectively correct answers (math, coding, factual question
 import json
 import logging
 import re
-from typing import List, Dict, Any, Type, Literal
+from typing import List, Dict, Any, Type, Literal, Optional
 
 from .base_generator import BaseGenerator
 from ..data_models import RLVerifiable, TrainingDataFormat

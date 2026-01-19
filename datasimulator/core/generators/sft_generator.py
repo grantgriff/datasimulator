@@ -8,7 +8,7 @@ Supports both message-based and completion-based formats:
 
 import json
 import logging
-from typing import List, Dict, Any, Type, Literal
+from typing import List, Dict, Any, Type, Literal, Optional
 
 from .base_generator import BaseGenerator
 from ..data_models import (
