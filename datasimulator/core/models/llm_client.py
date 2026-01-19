@@ -235,6 +235,88 @@ class OpenAIClient(BaseLLMClient):
         return input_cost + output_cost
 
 
+class GeminiClient(BaseLLMClient):
+    """Google Gemini API client."""
+
+    # Pricing per 1M tokens (as of Jan 2025)
+    PRICING = {
+        "gemini-2.0-flash": {"input": 0.075, "output": 0.30},
+        "gemini-2.0-flash-exp": {"input": 0.075, "output": 0.30},
+        "gemini-1.5-pro": {"input": 1.25, "output": 5.00},
+        "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
+    }
+
+    def __init__(self, model: str, api_key: Optional[str] = None):
+        super().__init__(model)
+        try:
+            import google.generativeai as genai
+        except ImportError:
+            raise ImportError(
+                "google-generativeai package not installed. "
+                "Install with: pip install google-generativeai"
+            )
+
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "Google API key required. "
+                "Set GOOGLE_API_KEY environment variable or pass google_api_key parameter."
+            )
+
+        genai.configure(api_key=self.api_key)
+        self.client = genai.GenerativeModel(model)
+
+    async def generate(
+        self,
+        prompt: str,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        **kwargs
+    ) -> str:
+        """Generate text using Gemini."""
+        try:
+            # Configure generation settings
+            generation_config = {
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+            }
+
+            # Generate response
+            response = await self.client.generate_content_async(
+                prompt,
+                generation_config=generation_config
+            )
+
+            # Track token usage
+            if hasattr(response, 'usage_metadata'):
+                self.last_input_tokens = response.usage_metadata.prompt_token_count
+                self.last_output_tokens = response.usage_metadata.candidates_token_count
+            else:
+                # Estimate if usage not available
+                self.last_input_tokens = len(prompt) // 4
+                self.last_output_tokens = len(response.text) // 4
+
+            return response.text
+
+        except Exception as e:
+            logger.error(f"Gemini API error: {e}")
+            raise
+
+    def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        """Estimate cost based on token usage."""
+        # Extract base model name (e.g., "gemini-2.0-flash" from "gemini-2.0-flash-exp")
+        base_model = self.model.split("-exp")[0]
+        pricing = self.PRICING.get(
+            base_model,
+            {"input": 0.075, "output": 0.30}  # Default to Flash pricing
+        )
+
+        input_cost = (input_tokens / 1_000_000) * pricing["input"]
+        output_cost = (output_tokens / 1_000_000) * pricing["output"]
+
+        return input_cost + output_cost
+
+
 class OllamaClient(BaseLLMClient):
     """Ollama local model client."""
 
@@ -301,6 +383,7 @@ class UnifiedLLMClient:
         model: str,
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
+        google_api_key: Optional[str] = None,
         ollama_host: str = "http://localhost:11434"
     ):
         self.model = model
@@ -308,6 +391,7 @@ class UnifiedLLMClient:
             model,
             anthropic_api_key,
             openai_api_key,
+            google_api_key,
             ollama_host
         )
 
@@ -316,6 +400,7 @@ class UnifiedLLMClient:
         model: str,
         anthropic_api_key: Optional[str],
         openai_api_key: Optional[str],
+        google_api_key: Optional[str],
         ollama_host: str
     ) -> BaseLLMClient:
         """Create appropriate client based on model name."""
@@ -326,6 +411,10 @@ class UnifiedLLMClient:
         elif model.startswith("gpt"):
             logger.info(f"Using OpenAI: {model}")
             return OpenAIClient(model, openai_api_key)
+
+        elif model.startswith("gemini"):
+            logger.info(f"Using Google Gemini: {model}")
+            return GeminiClient(model, google_api_key)
 
         else:
             logger.info(f"Using Ollama (local): {model}")
@@ -370,7 +459,7 @@ class ModelRouter:
 
     def __init__(
         self,
-        generator_model: str = "claude-sonnet-4-5-20250929",
+        generator_model: str = "gemini-2.0-flash",
         verifier_model: str = "gpt-4o-mini-2024-07-18",
         diversity_model: str = "gpt-4o-mini-2024-07-18",
         **api_keys
