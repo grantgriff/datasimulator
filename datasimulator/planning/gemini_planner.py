@@ -28,7 +28,7 @@ class GeminiPlanner:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-1.5-pro-latest",
+        model: str = "gemini-2.5-pro",
         chunk_overlap: float = 0.1
     ):
         """
