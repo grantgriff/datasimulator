@@ -78,7 +78,7 @@ def main():
         return
 
     # STEP 3: Configure generation parameters
-    TARGET_SAMPLES = 2500  # Adjust this (2000-3000 range)
+    TARGET_SAMPLES = 40  # Adjust this for testing (use 2500 for production)
     MAX_BUDGET = 40.0      # Your budget
 
     print(f"\n⚙️  Generation Configuration:")
