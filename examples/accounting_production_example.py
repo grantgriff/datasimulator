@@ -101,7 +101,7 @@ def main():
 
         # Model configuration
         models={
-            "generator": "claude-3-5-sonnet-20241022",  # Main generator
+            "generator": "claude-3-5-sonnet-latest",  # Main generator
             "verifier": "gpt-4o-mini",                   # Quality scoring
         },
 

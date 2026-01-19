@@ -209,7 +209,7 @@ class DataSimulator:
             source="accounting_textbook.pdf",
             data_type="sft",
             models={
-                "generator": "claude-3-5-sonnet-20241022",
+                "generator": "claude-3-5-sonnet-latest",
                 "verifier": "gpt-4o-mini",
             }
         )
@@ -282,7 +282,7 @@ class DataSimulator:
 
         # Setup models
         model_config = models or {}
-        generator_model = model_config.get("generator", "claude-3-5-sonnet-20241022")
+        generator_model = model_config.get("generator", "claude-3-5-sonnet-latest")
         verifier_model = model_config.get("verifier", "gpt-4o-mini")
         diversity_model = model_config.get("diversity", "qwen2.5:7b")
 
