@@ -10,6 +10,7 @@ Supports:
 import os
 import json
 import logging
+import asyncio
 from typing import Optional, Dict, Any, List
 from abc import ABC, abstractmethod
 
@@ -82,52 +83,74 @@ class ClaudeClient(BaseLLMClient):
         **kwargs
     ) -> str:
         """Generate text using Claude with streaming for large requests."""
-        try:
-            # Use streaming for requests with high max_tokens (>10k)
-            if max_tokens > 10000:
-                full_response = ""
-                input_tokens = 0
-                output_tokens = 0
+        max_retries = 3
+        retry_delay = 2  # seconds
 
-                async with self.client.messages.stream(
-                    model=self.model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    messages=[{"role": "user", "content": prompt}],
-                    **kwargs
-                ) as stream:
-                    async for text in stream.text_stream:
-                        full_response += text
+        for attempt in range(max_retries):
+            try:
+                # Use streaming for requests with high max_tokens (>10k)
+                if max_tokens > 10000:
+                    full_response = ""
+                    input_tokens = 0
+                    output_tokens = 0
 
-                    # Get final message for token usage
-                    final_message = await stream.get_final_message()
-                    input_tokens = final_message.usage.input_tokens
-                    output_tokens = final_message.usage.output_tokens
+                    async with self.client.messages.stream(
+                        model=self.model,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        messages=[{"role": "user", "content": prompt}],
+                        **kwargs
+                    ) as stream:
+                        async for text in stream.text_stream:
+                            full_response += text
 
-                # Track token usage
-                self.last_input_tokens = input_tokens
-                self.last_output_tokens = output_tokens
+                        # Get final message for token usage
+                        final_message = await stream.get_final_message()
+                        input_tokens = final_message.usage.input_tokens
+                        output_tokens = final_message.usage.output_tokens
 
-                return full_response
-            else:
-                # Use non-streaming for smaller requests
-                response = await self.client.messages.create(
-                    model=self.model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    messages=[{"role": "user", "content": prompt}],
-                    **kwargs
-                )
+                    # Track token usage
+                    self.last_input_tokens = input_tokens
+                    self.last_output_tokens = output_tokens
 
-                # Track token usage
-                self.last_input_tokens = response.usage.input_tokens
-                self.last_output_tokens = response.usage.output_tokens
+                    return full_response
+                else:
+                    # Use non-streaming for smaller requests
+                    response = await self.client.messages.create(
+                        model=self.model,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        messages=[{"role": "user", "content": prompt}],
+                        **kwargs
+                    )
 
-                return response.content[0].text
+                    # Track token usage
+                    self.last_input_tokens = response.usage.input_tokens
+                    self.last_output_tokens = response.usage.output_tokens
 
-        except Exception as e:
-            logger.error(f"Claude API error: {e}")
-            raise
+                    return response.content[0].text
+
+            except Exception as e:
+                error_msg = str(e).lower()
+                # Retry on connection/network errors
+                if attempt < max_retries - 1 and any(x in error_msg for x in [
+                    "peer closed connection",
+                    "incomplete chunked read",
+                    "connection",
+                    "timeout",
+                    "reset"
+                ]):
+                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                    logger.warning(f"Connection error on attempt {attempt + 1}/{max_retries}: {e}")
+                    logger.info(f"Retrying in {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"Claude API error: {e}")
+                    raise
+
+        # Should never reach here, but just in case
+        raise Exception("Max retries exceeded")
 
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         """Estimate cost based on token usage."""

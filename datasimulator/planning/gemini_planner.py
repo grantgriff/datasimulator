@@ -211,7 +211,7 @@ class GeminiPlanner:
         total_samples: int,
         data_type: str = "sft",
         source_files: Optional[List[str]] = None,
-        batch_size: int = 20
+        batch_size: int = 10
     ) -> Dict[str, Any]:
         """
         Analyze sources and create batch-level generation plan.
@@ -221,7 +221,7 @@ class GeminiPlanner:
             total_samples: Total number of samples to generate
             data_type: Type of training data (sft, dpo, etc.)
             source_files: List of source file names (optional)
-            batch_size: Number of samples per batch (default: 20)
+            batch_size: Number of samples per batch (default: 10)
 
         Returns:
             Dictionary with:
@@ -251,7 +251,7 @@ class GeminiPlanner:
         total_samples: int,
         data_type: str,
         source_files: Optional[List[str]] = None,
-        batch_size: int = 20
+        batch_size: int = 10
     ) -> Dict[str, Any]:
         """Create batch-level plan with single Gemini API call."""
 
@@ -356,7 +356,7 @@ Provide ONLY the JSON output, nothing else.
         total_samples: int,
         data_type: str,
         source_files: Optional[List[str]] = None,
-        batch_size: int = 20
+        batch_size: int = 10
     ) -> Dict[str, Any]:
         """
         Create batch-level plan for large documents using chunked analysis.
