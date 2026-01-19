@@ -108,7 +108,7 @@ class SFTGenerator(BaseGenerator):
             response = await self.model_router.generate(
                 prompt,
                 temperature=0.8,  # Higher temp for diversity
-                max_tokens=batch_size * 3000  # ~3000 tokens per sample - increased for complex responses
+                max_tokens=batch_size * 5000  # ~5000 tokens per sample - generous headroom to prevent truncation
             )
 
             # Parse JSON response
