@@ -182,23 +182,15 @@ EXAMPLE 1:
   "prompt": "A manufacturing business purchases equipment for $35,000 and uses Section 179. If they have $35,000 in taxable income, how much can they deduct in year 1?",
   "ground_truth": "35000",
   "verification_type": "{self.verification_type}",
-  "metadata": {{"explanation": "Section 179 allows immediate deduction of full equipment cost if business has sufficient income", "reference": "IRS Publication 946 Chapter 2"}}
+  "metadata": {{"explanation": "Section 179 allows immediate deduction of full equipment cost"}}
 }}
 
 EXAMPLE 2:
 {{
-  "prompt": "A company buys a computer system for $10,000 and depreciates it under 5-year MACRS. Using half-year convention and 200% declining balance, what is the Year 1 depreciation percentage?",
+  "prompt": "A company buys a computer system for $10,000 under 5-year MACRS with half-year convention. What is the Year 1 depreciation percentage?",
   "ground_truth": "20",
   "verification_type": "{self.verification_type}",
-  "metadata": {{"calculation": "200% / 5 years = 40% annual, 40% * 0.5 (half-year) = 20%", "reference": "IRS Publication 946 MACRS tables"}}
-}}
-
-EXAMPLE 3:
-{{
-  "prompt": "If a $10,000 software license is amortized over 36 months straight-line, what is the monthly amortization expense?",
-  "ground_truth": "277.78",
-  "verification_type": "{self.verification_type}",
-  "metadata": {{"calculation": "10000 / 36 = 277.78", "note": "Software licenses typically amortized over license term"}}
+  "metadata": {{"calculation": "200% / 5 years = 40%, half-year = 20%"}}
 }}
 
 Your questions should include specific dollar amounts, percentages, or calculations with objectively verifiable numeric answers.

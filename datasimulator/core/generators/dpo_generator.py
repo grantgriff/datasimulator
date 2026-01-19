@@ -180,14 +180,14 @@ SOURCE CONTENT:
 EXAMPLE 1:
 {{
   "prompt": "I bought a $35,000 piece of equipment for my manufacturing business. Should I use Section 179 or depreciate it over time?",
-  "chosen": "Section 179 allows you to deduct the full $35,000 immediately in 2024, giving you the largest first-year tax benefit. You must have at least $35,000 in taxable business income to claim the full deduction.\\n\\nAlternatives:\\n1. Section 179: Deduct $35,000 now (requires sufficient income)\\n2. Bonus Depreciation: Deduct 60% ($21,000) in 2024, depreciate remaining $14,000 over 5-7 years\\n3. Regular MACRS: Spread $35,000 over 5-7 years\\n\\nRecommendation: Use Section 179 if you have the income for maximum immediate tax savings. If your income is lower this year but expected to rise, consider regular depreciation.\\n\\nSee IRS Publication 946, Chapter 2 for Section 179 rules and Chapter 4 for MACRS depreciation.",
+  "chosen": "Section 179 allows you to deduct the full $35,000 immediately in 2024, giving you the largest first-year tax benefit.\\n\\nAlternatives:\\n1. Section 179: Deduct $35,000 now (requires sufficient income)\\n2. Bonus Depreciation: Deduct 60% ($21,000) in 2024, depreciate remaining $14,000 over 5-7 years\\n3. Regular MACRS: Spread $35,000 over 5-7 years\\n\\nRecommendation: Use Section 179 if you have the income for maximum immediate tax savings.\\n\\nSee IRS Publication 946, Chapter 2 for Section 179 rules.",
   "rejected": "Just depreciate it over 5 years like normal equipment. Section 179 is complicated and not worth the hassle for most businesses."
 }}
 
 EXAMPLE 2:
 {{
   "prompt": "What is the difference between tangible and intangible property for depreciation purposes?",
-  "chosen": "Tangible property is physical property you can touch. Intangible property is non-physical property with value.\\n\\nTangible Property (depreciable):\\n- Equipment, machinery, vehicles\\n- Buildings and structures\\n- Furniture, computers, tools\\n- Depreciated under MACRS over 3, 5, 7, 15, 27.5, or 39 years\\n\\nIntangible Property (amortizable):\\n- Patents, copyrights, trademarks\\n- Goodwill (from acquisitions)\\n- Software and licenses\\n- Amortized over 15 years under Section 197\\n\\nExample: A $10,000 computer is tangible (5-year MACRS). A $10,000 software license is intangible (amortized over 36 months).\\n\\nNote: Section 179 covers both tangible property and certain software.\\n\\nSee IRS Publication 946 for tangible property and Publication 535 for intangible property.",
+  "chosen": "Tangible property is physical property you can touch. Intangible property is non-physical property with value.\\n\\nTangible Property (depreciable):\\n- Equipment, machinery, vehicles\\n- Buildings and structures\\n- Depreciated under MACRS over 5-7 years\\n\\nIntangible Property (amortizable):\\n- Patents, copyrights, trademarks\\n- Goodwill, software, licenses\\n- Amortized over 15 years under Section 197\\n\\nExample: A $10,000 computer is tangible (5-year MACRS). A $10,000 software license is intangible (36-month amortization).\\n\\nSee IRS Publication 946 for tangible property.",
   "rejected": "Tangible assets are things like equipment and buildings that you depreciate. Intangible assets are things like patents that don't depreciate."
 }}
 
