@@ -186,7 +186,10 @@ def main():
     print(f"  Total Samples:      {len(dataset):,}")
     print(f"  Average Quality:    {dataset.average_quality:.2f}/10")
     print(f"  Total Cost:         ${dataset.total_cost:.2f}")
-    print(f"  Cost per Sample:    ${dataset.total_cost / len(dataset):.4f}")
+    if len(dataset) > 0:
+        print(f"  Cost per Sample:    ${dataset.total_cost / len(dataset):.4f}")
+    else:
+        print(f"  Cost per Sample:    N/A (no samples generated)")
 
     print(f"\n💾 OUTPUT FILES:")
     print(f"  Dataset (JSONL):    {output_path}")
