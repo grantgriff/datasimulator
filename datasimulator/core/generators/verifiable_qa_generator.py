@@ -175,17 +175,45 @@ SOURCE CONTENT:
   "metadata": {{"calculation": "500000 * 0.03 = 15000"}}
 }}
 
-3. **CONTENT SOURCE**: Pull questions/answers DIRECTLY from source material
+3. **FEW-SHOT EXAMPLES OF APPROPRIATE DETAIL LEVEL**:
+
+EXAMPLE 1:
+{{
+  "prompt": "A manufacturing business purchases equipment for $35,000 and uses Section 179. If they have $35,000 in taxable income, how much can they deduct in year 1?",
+  "ground_truth": "35000",
+  "verification_type": "{self.verification_type}",
+  "metadata": {{"explanation": "Section 179 allows immediate deduction of full equipment cost if business has sufficient income", "reference": "IRS Publication 946 Chapter 2"}}
+}}
+
+EXAMPLE 2:
+{{
+  "prompt": "A company buys a computer system for $10,000 and depreciates it under 5-year MACRS. Using half-year convention and 200% declining balance, what is the Year 1 depreciation percentage?",
+  "ground_truth": "20",
+  "verification_type": "{self.verification_type}",
+  "metadata": {{"calculation": "200% / 5 years = 40% annual, 40% * 0.5 (half-year) = 20%", "reference": "IRS Publication 946 MACRS tables"}}
+}}
+
+EXAMPLE 3:
+{{
+  "prompt": "If a $10,000 software license is amortized over 36 months straight-line, what is the monthly amortization expense?",
+  "ground_truth": "277.78",
+  "verification_type": "{self.verification_type}",
+  "metadata": {{"calculation": "10000 / 36 = 277.78", "note": "Software licenses typically amortized over license term"}}
+}}
+
+Your questions should include specific dollar amounts, percentages, or calculations with objectively verifiable numeric answers.
+
+4. **CONTENT SOURCE**: Pull questions/answers DIRECTLY from source material
    - Extract facts, calculations, definitions from the sources
    - Ensure ground_truth answers are objectively verifiable
    - Base numeric questions on calculations shown in sources
 
-4. **VERIFICATION TYPE**: {self.verification_type}
+5. **VERIFICATION TYPE**: {self.verification_type}
 {verification_instructions}
 
-5. Generate EXACTLY {batch_size} samples about "{topic} → {subtopic}"
+6. Generate EXACTLY {batch_size} samples about "{topic} → {subtopic}"
 
-6. Difficulty: {batch_size//3} basic, {batch_size//3} intermediate, {batch_size//3} advanced
+7. Difficulty: {batch_size//3} basic, {batch_size//3} intermediate, {batch_size//3} advanced
 
 Return JSON array: [{{"prompt": "...", "ground_truth": "...", "verification_type": "{self.verification_type}"}}, ...]
 ONLY JSON, no other text.
