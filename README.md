@@ -1,14 +1,23 @@
 # DataSimulator
 
-Generate high-quality post-training datasets for fine-tuning language models.
+**A Python SDK for generating synthetic post-training datasets to fine-tune language models.**
 
-DataSimulator is an SDK that creates synthetic training data for SFT, DPO, and verifiable Q&A from documents, images, and natural language prompts.
+DataSimulator automatically creates high-quality training data (SFT, DPO, Verifiable Q&A) from your source content - whether it's local documents, web pages, or URLs. Point it at your knowledge base, configure your requirements, and get production-ready training datasets.
+
+**Key Features:**
+- 📄 **Multiple Source Types**: Local files (PDF, DOCX, TXT), web URLs, or scraped content
+- 🤖 **Three Training Formats**: SFT (chat), DPO (preference), Verifiable Q&A (ground truth)
+- ⚡ **Parallel Generation**: 4x faster with concurrent batch processing
+- 💰 **Cost Optimized**: Gemini Flash default = 40x cheaper than Claude Sonnet
+- 🎯 **Quality Controlled**: Automated scoring + smart regeneration
+- 🔄 **Crash Recovery**: Auto-checkpointing every 20 samples
+- 📊 **Analytics**: Real-time cost tracking and quality metrics
 
 ---
 
 ## 🚀 Quick Start - Production Example
 
-The easiest way to get started is using the **production example script** that generates datasets from your documents.
+The easiest way to get started is using the **production example script** that generates datasets from your source content.
 
 ### Step 1: Install Dependencies
 
@@ -32,7 +41,9 @@ OPENAI_API_KEY=your_openai_key_here
 GOOGLE_API_KEY=your_google_api_key_here
 ```
 
-### Step 3: Add Your Documents
+### Step 3: Add Your Source Content
+
+**Option A: Local Documents (Folder)**
 
 Place your training documents in a folder:
 
@@ -42,6 +53,32 @@ mkdir examples/my_docs
 ```
 
 Supported formats: `.pdf`, `.docx`, `.txt` - **All files in the folder will be used!**
+
+**Option B: Web URLs**
+
+You can also use web pages or documentation URLs as sources:
+
+```python
+# In accounting_production_example.py, line 39
+# Instead of folder path, use URLs:
+source_urls = [
+    "https://example.com/docs/page1",
+    "https://example.com/docs/page2",
+    "https://docs.company.com/api-guide"
+]
+```
+
+**Option C: Mix Both**
+
+Combine local files and web URLs:
+
+```python
+sources = [
+    "examples/my_docs/guide.pdf",
+    "https://example.com/documentation",
+    "examples/my_docs/manual.docx"
+]
+```
 
 ### Step 4: Configure Generation Settings
 
@@ -101,39 +138,46 @@ Here's how DataSimulator works under the hood:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ 1. DOCUMENT LOADING                                             │
-│    • Reads all docs from folder (PDFs, DOCX, TXT)              │
-│    • Extracts text content (37,872 chars total)                │
-│    • Stores per-file for targeted generation                   │
+│ 1. SOURCE CONTENT LOADING                                       │
+│    • Local files: PDFs, DOCX, TXT from folder                  │
+│    • Web URLs: Scrapes and extracts content from web pages     │
+│    • Mixed: Combines local files + URLs                        │
+│    • Extracts text content (e.g., 37,872 chars total)          │
+│    • Stores per-source for targeted generation                 │
 └─────────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │ 2. GEMINI PLANNING (Topic Extraction)                          │
-│    • Analyzes all document content                             │
+│    • Analyzes all source content (docs + web pages)            │
 │    • Extracts major topics and subtopics                       │
-│    • Creates batch plan: 150 batches × 10 samples = 1500      │
-│    • Assigns relevant docs to each batch                       │
+│    • Creates batch plan: 75 batches × 20 samples = 1500       │
+│    • Assigns relevant sources to each batch                    │
 └─────────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ 3. BATCH GENERATION (Claude Sonnet)                            │
-│    Batch 1/150: "Financial Statements → Balance Sheet"         │
-│    • Generates 10 samples on this specific topic               │
-│    • Uses only relevant documents as source                    │
-│    • 64k token limit, ~6-8 minutes per batch                  │
+│ 3. PARALLEL BATCH GENERATION (Gemini 2.0 Flash)                │
+│    🔄 Processing 4 batches in parallel:                         │
+│    📦 Batch 1: "Financial Statements → Balance Sheet"          │
+│    📦 Batch 2: "Revenue Recognition → GAAP Standards"          │
+│    📦 Batch 3: "Cost Accounting → Job Costing"                 │
+│    📦 Batch 4: "Tax Accounting → Depreciation"                 │
+│    • Each generates 20 samples on specific topic               │
+│    • Uses only relevant sources for that topic                 │
+│    • 64k token limit, ~3-5 minutes per group of 4             │
 └─────────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │ 4. QUALITY SCORING (GPT-4o-mini)                               │
 │    • Scores each sample 1-10 for quality                       │
 │    • Checks: accuracy, completeness, relevance, clarity        │
-│    • Batch processing (10 samples at once)                     │
+│    • Batch processing (20 samples at once)                     │
 └─────────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ 5. FILTERING & REGENERATION                                     │
+│ 5. FILTERING & SMART REGENERATION                               │
 │    • Keep samples with score ≥ 6.0 (quality threshold)         │
-│    • Regenerate failed samples (up to 10 retries)              │
+│    • Regenerate ONLY failed samples (not entire batch)         │
+│    • Up to 10 retry attempts per batch                         │
 │    • Only stops after 3 consecutive failures                   │
 └─────────────────────────────────────────────────────────────────┘
                             ↓
@@ -141,7 +185,7 @@ Here's how DataSimulator works under the hood:
 │ 6. SAVE & CHECKPOINT                                            │
 │    • Saves passing samples to outputs/dataset.jsonl            │
 │    • Checkpoints every 20 samples (crash recovery)             │
-│    • Final analytics displayed                                 │
+│    • Final analytics displayed (cost, quality, count)          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -153,15 +197,38 @@ All configurable variables in `examples/accounting_production_example.py`:
 
 | Variable | Line | Options | Default | Description |
 |----------|------|---------|---------|-------------|
+| **source** | 39-42 | File paths, URLs, or list | `"examples/accounting_docs"` | **Source content**: folder path, web URLs, or mixed list |
 | **TARGET_SAMPLES** | 81 | Any integer | 1500 | Number of samples to generate |
 | **MAX_BUDGET** | 82 | Any float | 40.0 | Max cost in USD before stopping |
 | **data_type** | 100 | `"sft"`, `"dpo"`, `"verifiable_qa"` | `"sft"` | Training data format |
-| **generator** | 104 | See Model Selection | `"claude-sonnet-4-5-20250929"` | Main generation model |
+| **generator** | 104 | See Model Selection | `"gemini-2.0-flash"` | Main generation model |
 | **verifier** | 105 | See Model Selection | `"gpt-4o-mini-2024-07-18"` | Quality scoring model |
 | **quality_threshold** | 109 | 1.0 - 10.0 | 6.0 | Minimum quality score to accept |
-| **batch_size** | 110 | 5 - 20 | 10 | Samples per batch (10 is safe) |
+| **batch_size** | 110 | 5 - 50 | 20 | Samples per batch (20 recommended) |
+| **parallel_batches** | N/A | 1 - 10 | 4 | Concurrent batches (4 = 4x speedup) |
 | **checkpoint_interval** | 118 | Any integer | 20 | Save progress every N samples |
-| **docs_dir** | 39 | Any path | `"examples/accounting_docs"` | Folder with training documents |
+
+### Source Configuration Examples
+
+**Local folder:**
+```python
+source = "examples/my_docs"  # All PDFs, DOCX, TXT in folder
+```
+
+**Single web URL:**
+```python
+source = "https://docs.example.com/guide"
+```
+
+**Multiple sources (mixed):**
+```python
+source = [
+    "examples/docs/manual.pdf",
+    "https://docs.example.com/api",
+    "examples/docs/guide.txt",
+    "https://wiki.company.com/page"
+]
+```
 
 ### Model Selection
 
@@ -169,15 +236,17 @@ All configurable variables in `examples/accounting_production_example.py`:
 
 | Model | Cost | Speed | Quality | Recommendation |
 |-------|------|-------|---------|----------------|
-| `claude-sonnet-4-5-20250929` | $$$ | Slow | Excellent | Production (complex responses) |
-| `claude-3-5-haiku-20241022` | $ | Fast | Good | Cost-effective (simpler responses) |
-| `gpt-4o-2024-08-06` | $$ | Medium | Very Good | Alternative to Sonnet |
+| `gemini-2.0-flash` | $ | Very Fast | Very Good | **DEFAULT** - Best value (40x cheaper) |
+| `claude-sonnet-4-5-20250929` | $$$ | Slow | Excellent | Premium (complex responses) |
+| `claude-3-5-haiku-20241022` | $$ | Fast | Very Good | Fast alternative to Sonnet |
+| `gpt-4o-2024-08-06` | $$ | Medium | Very Good | OpenAI alternative |
 | `gpt-4o-mini-2024-07-18` | $ | Fast | Good | Budget option |
 
 **Cost Comparison (1500 samples):**
-- **Sonnet 4.5:** ~$16.50 (best quality)
-- **Haiku 3.5:** ~$4.00 (4x cheaper, good quality)
-- **GPT-4o-mini:** ~$2.50 (cheapest, decent quality)
+- **Gemini 2.0 Flash:** ~$0.40 ✨ **DEFAULT** (40x cheaper than Sonnet!)
+- **GPT-4o-mini:** ~$2.50 (budget alternative)
+- **Haiku 3.5:** ~$4.00 (fast Claude)
+- **Sonnet 4.5:** ~$16.50 (premium quality)
 
 **Verifier Models (Line 105):**
 
