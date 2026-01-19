@@ -110,7 +110,7 @@ class VerifiableQAGenerator(BaseGenerator):
             response = await self.model_router.generate(
                 prompt,
                 temperature=0.7,  # Lower temp for more precise answers
-                max_tokens=batch_size * 2000  # ~2000 tokens per sample for detailed responses with examples
+                max_tokens=batch_size * 5000  # ~5000 tokens per sample - generous headroom to prevent truncation
             )
 
             # Parse JSON response
