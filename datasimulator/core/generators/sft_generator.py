@@ -108,7 +108,7 @@ class SFTGenerator(BaseGenerator):
             response = await self.model_router.generate(
                 prompt,
                 temperature=0.8,  # Higher temp for diversity
-                max_tokens=batch_size * 600  # ~600 tokens per sample (generous for accounting content)
+                max_tokens=batch_size * 1200  # ~1200 tokens per sample for detailed responses
             )
 
             # Parse JSON response
@@ -227,6 +227,34 @@ EXAMPLE FORMAT:
    - Detailed and educational (not just brief answers)
    - Include examples, formulas, journal entries when relevant
    - Explain the "why" not just the "what"
+
+8. **RESPONSE LENGTH AND DETAIL REQUIREMENTS**:
+   - Each assistant response should be DETAILED and COMPREHENSIVE (300-600 words typical)
+   - Include multiple examples, calculations, and scenarios
+   - Provide step-by-step explanations with specific numbers
+   - Reference relevant standards, principles, and best practices
+   - Include journal entries, formulas, and specific dollar amounts where applicable
+   - Add context about when/why/how concepts apply in practice
+
+   EXAMPLE OF APPROPRIATE DETAIL LEVEL:
+   "Should my allowance percentage be higher during a recession?"
+
+   Good response would include:
+   - Yes/no with reasoning (2-3 sentences)
+   - Typical adjustment range (+0.5% to +1.5%)
+   - Specific calculation example with dollar amounts
+   - Journal entry for the adjustment
+   - Factors affecting the increase (industry, customer base, geography, duration)
+   - Historical analysis (2008-2009 recession example)
+   - Leading vs lagging indicators
+   - Quarterly monitoring approach with examples
+   - Aging schedule impact with specific percentages
+   - Industry benchmark comparison
+   - Disclosure example
+   - Post-recession guidance
+   - Technical references (ASC 310-10-35, SEC SAB 102)
+
+   Your responses should match this level of comprehensive detail with real calculations and examples.
 
 OUTPUT: JSON array with EXACTLY {batch_size} objects in the format shown above.
 Provide ONLY the JSON array, no other text.
