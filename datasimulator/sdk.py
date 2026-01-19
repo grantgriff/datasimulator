@@ -227,7 +227,7 @@ class DataSimulator:
         quality_threshold: float = 6.0,
         diversity_threshold: float = 0.85,
         max_cost: float = 20.0,
-        batch_size: int = 20,
+        batch_size: int = 10,
         interactive: bool = True,
         checkpoint_dir: Optional[str] = None,
         checkpoint_interval: int = 20,

@@ -107,7 +107,7 @@ def main():
 
         # Quality settings
         quality_threshold=6.0,        # Accept samples scored 6.0+
-        batch_size=20,                # Generate 20 samples per batch
+        batch_size=10,                # Generate 10 samples per batch (safe for 64k token limit)
 
         # Autonomous settings (no prompts)
         max_cost=MAX_BUDGET,          # Stop at $40

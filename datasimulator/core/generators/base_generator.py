@@ -494,7 +494,7 @@ Output (JSON array only):
             batch_num = batch_spec.get("batch_number", 0)
             topic = batch_spec.get("topic", "General")
             subtopic = batch_spec.get("subtopic", "")
-            batch_size = generation_plan.get("batch_size", 20)
+            batch_size = generation_plan.get("batch_size", 10)
 
             # Adjust batch size for last batch
             remaining = num_samples - samples_generated
