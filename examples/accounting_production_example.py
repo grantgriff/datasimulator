@@ -101,7 +101,7 @@ def main():
 
         # Model configuration
         models={
-            "generator": "claude-sonnet-4-5-20250929",  # Main generator
+            "generator": "gemini-2.0-flash",  # Main generator (40x cheaper than Sonnet!)
             "verifier": "gpt-4o-mini-2024-07-18",       # Quality scoring
         },
 

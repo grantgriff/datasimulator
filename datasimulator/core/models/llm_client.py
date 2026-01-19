@@ -459,7 +459,7 @@ class ModelRouter:
 
     def __init__(
         self,
-        generator_model: str = "claude-sonnet-4-5-20250929",
+        generator_model: str = "gemini-2.0-flash",
         verifier_model: str = "gpt-4o-mini-2024-07-18",
         diversity_model: str = "gpt-4o-mini-2024-07-18",
         **api_keys

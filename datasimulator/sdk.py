@@ -228,6 +228,7 @@ class DataSimulator:
         diversity_threshold: float = 0.85,
         max_cost: float = 20.0,
         batch_size: int = 20,
+        parallel_batches: int = 4,
         interactive: bool = True,
         checkpoint_dir: Optional[str] = None,
         checkpoint_interval: int = 20,
@@ -250,6 +251,7 @@ class DataSimulator:
             diversity_threshold: Maximum similarity for diversity (0-1)
             max_cost: Maximum cost before prompting user (USD)
             batch_size: Number of samples per API call
+            parallel_batches: Number of batches to generate simultaneously (default: 4)
             interactive: Whether to prompt user when cost limit is reached (False for autonomous)
             checkpoint_dir: Directory to save checkpoints (optional)
             checkpoint_interval: Save checkpoint every N samples (default: 20)
@@ -261,6 +263,7 @@ class DataSimulator:
         self.source = source
         self.data_type = data_type
         self.batch_size = batch_size
+        self.parallel_batches = parallel_batches
         self.quality_threshold = quality_threshold
         self.diversity_threshold = diversity_threshold
 
@@ -282,7 +285,7 @@ class DataSimulator:
 
         # Setup models
         model_config = models or {}
-        generator_model = model_config.get("generator", "claude-sonnet-4-5-20250929")
+        generator_model = model_config.get("generator", "gemini-2.0-flash")
         verifier_model = model_config.get("verifier", "gpt-4o-mini-2024-07-18")
         diversity_model = model_config.get("diversity", "gpt-4o-mini-2024-07-18")
 
@@ -434,6 +437,7 @@ class DataSimulator:
         config = GenerationConfig(
             num_samples=num_samples,
             batch_size=self.batch_size,
+            parallel_batches=self.parallel_batches,
             quality_threshold=self.quality_threshold,
             diversity_threshold=self.diversity_threshold,
             max_cost=self.cost_tracker.max_cost,
