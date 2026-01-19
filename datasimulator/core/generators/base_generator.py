@@ -583,6 +583,8 @@ Output (JSON array only):
 
                 # Smart regeneration: only regenerate failed samples
                 regeneration_attempt = 0
+                consecutive_failures = 0  # Track consecutive attempts with 0 passing samples
+
                 while len(batch_samples) < actual_batch_size and regeneration_attempt < self.max_retries:
                     samples_needed = actual_batch_size - len(batch_samples)
                     regeneration_attempt += 1
@@ -673,14 +675,30 @@ Output (JSON array only):
                         if show_progress:
                             print(f"   └─ Accepted: {regen_passed} regenerated samples")
 
-                        # If we got no passing samples this attempt, no point continuing
+                        # Track consecutive failures
                         if regen_passed == 0:
-                            logger.warning(f"No passing samples in regeneration attempt {regeneration_attempt}, stopping regeneration")
-                            break
+                            consecutive_failures += 1
+                            logger.warning(f"No passing samples in regeneration attempt {regeneration_attempt} ({consecutive_failures} consecutive failures)")
+
+                            # Only give up after 3 consecutive attempts with 0 passing samples
+                            if consecutive_failures >= 3:
+                                logger.warning(f"Stopping regeneration after {consecutive_failures} consecutive attempts with no passing samples")
+                                break
+                        else:
+                            # Reset counter on success
+                            consecutive_failures = 0
 
                     except Exception as e:
                         logger.error(f"Error during regeneration attempt {regeneration_attempt}: {e}")
-                        break
+                        consecutive_failures += 1
+
+                        # Only give up after 3 consecutive exceptions
+                        if consecutive_failures >= 3:
+                            logger.warning(f"Stopping regeneration after {consecutive_failures} consecutive errors")
+                            break
+
+                        # Otherwise continue to next attempt
+                        continue
 
                 if len(batch_samples) < actual_batch_size:
                     shortfall = actual_batch_size - len(batch_samples)
