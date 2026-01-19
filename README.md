@@ -4,6 +4,204 @@ Generate high-quality post-training datasets for fine-tuning language models.
 
 DataSimulator is an SDK that creates synthetic training data for SFT, DPO, and verifiable Q&A from documents, images, and natural language prompts.
 
+---
+
+## 🚀 Quick Start - Production Example
+
+The easiest way to get started is using the **production example script** that generates datasets from your documents.
+
+### Step 1: Install Dependencies
+
+```bash
+git clone https://github.com/grantgriff/datasimulator.git
+cd datasimulator
+pip install -r requirements.txt
+```
+
+### Step 2: Set Up API Keys
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and add your API keys:
+
+```bash
+ANTHROPIC_API_KEY=your_anthropic_key_here
+OPENAI_API_KEY=your_openai_key_here
+GOOGLE_API_KEY=your_google_api_key_here
+```
+
+### Step 3: Add Your Documents
+
+Place your training documents in a folder:
+
+```bash
+mkdir examples/my_docs
+# Copy your PDFs, Word docs, or text files to examples/my_docs/
+```
+
+Supported formats: `.pdf`, `.docx`, `.txt` - **All files in the folder will be used!**
+
+### Step 4: Configure Generation Settings
+
+Open `examples/accounting_production_example.py` and configure these variables:
+
+```python
+# Line 81: Number of samples to generate
+TARGET_SAMPLES = 1500  # Change to your desired number (40 for testing, 1500-2500 for production)
+
+# Line 82: Budget limit
+MAX_BUDGET = 40.0  # Maximum spend in USD (script stops if exceeded)
+
+# Line 100: Data type - choose ONE
+data_type="sft",  # Options: "sft", "dpo", "verifiable_qa"
+
+# Lines 104-106: Model selection (IMPORTANT: affects cost and quality)
+models={
+    "generator": "claude-sonnet-4-5-20250929",  # Options: see Model Selection below
+    "verifier": "gpt-4o-mini-2024-07-18",       # Quality scoring (recommend keeping this)
+},
+
+# Line 109: Quality threshold
+quality_threshold=6.0,  # Accept samples scored 6.0-10.0 (lower = more samples, less quality)
+
+# Line 110: Batch size
+batch_size=10,  # Samples per batch (10 is safe for 64k token limit)
+
+# Line 39: Document folder (if you created a different folder)
+docs_dir = Path("examples/my_docs")  # Change to your folder path
+```
+
+### Step 5: Run Generation
+
+```bash
+python examples/accounting_production_example.py
+```
+
+The script will:
+1. ✅ **Load documents** from your folder
+2. ✅ **Check API keys** are configured
+3. ✅ **Create generation plan** with Gemini (extracts topics from docs)
+4. ✅ **Generate batches** of 10 samples using Claude Sonnet
+5. ✅ **Quality check** each batch with GPT-4o-mini
+6. ✅ **Save passing samples** (≥6.0/10 quality score)
+7. ✅ **Checkpoint every 20 samples** for crash recovery
+8. ✅ **Display final analytics** (cost, quality, sample count)
+
+**Output files:**
+- `outputs/accounting_sft_dataset.jsonl` - Your training dataset
+- `checkpoints/` - Intermediate saves (for resuming if interrupted)
+
+---
+
+## 📊 Process Flow
+
+Here's how DataSimulator works under the hood:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 1. DOCUMENT LOADING                                             │
+│    • Reads all docs from folder (PDFs, DOCX, TXT)              │
+│    • Extracts text content (37,872 chars total)                │
+│    • Stores per-file for targeted generation                   │
+└─────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ 2. GEMINI PLANNING (Topic Extraction)                          │
+│    • Analyzes all document content                             │
+│    • Extracts major topics and subtopics                       │
+│    • Creates batch plan: 150 batches × 10 samples = 1500      │
+│    • Assigns relevant docs to each batch                       │
+└─────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ 3. BATCH GENERATION (Claude Sonnet)                            │
+│    Batch 1/150: "Financial Statements → Balance Sheet"         │
+│    • Generates 10 samples on this specific topic               │
+│    • Uses only relevant documents as source                    │
+│    • 64k token limit, ~6-8 minutes per batch                  │
+└─────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ 4. QUALITY SCORING (GPT-4o-mini)                               │
+│    • Scores each sample 1-10 for quality                       │
+│    • Checks: accuracy, completeness, relevance, clarity        │
+│    • Batch processing (10 samples at once)                     │
+└─────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ 5. FILTERING & REGENERATION                                     │
+│    • Keep samples with score ≥ 6.0 (quality threshold)         │
+│    • Regenerate failed samples (up to 10 retries)              │
+│    • Only stops after 3 consecutive failures                   │
+└─────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ 6. SAVE & CHECKPOINT                                            │
+│    • Saves passing samples to outputs/dataset.jsonl            │
+│    • Checkpoints every 20 samples (crash recovery)             │
+│    • Final analytics displayed                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## ⚙️ Configuration Reference
+
+All configurable variables in `examples/accounting_production_example.py`:
+
+| Variable | Line | Options | Default | Description |
+|----------|------|---------|---------|-------------|
+| **TARGET_SAMPLES** | 81 | Any integer | 1500 | Number of samples to generate |
+| **MAX_BUDGET** | 82 | Any float | 40.0 | Max cost in USD before stopping |
+| **data_type** | 100 | `"sft"`, `"dpo"`, `"verifiable_qa"` | `"sft"` | Training data format |
+| **generator** | 104 | See Model Selection | `"claude-sonnet-4-5-20250929"` | Main generation model |
+| **verifier** | 105 | See Model Selection | `"gpt-4o-mini-2024-07-18"` | Quality scoring model |
+| **quality_threshold** | 109 | 1.0 - 10.0 | 6.0 | Minimum quality score to accept |
+| **batch_size** | 110 | 5 - 20 | 10 | Samples per batch (10 is safe) |
+| **checkpoint_interval** | 118 | Any integer | 20 | Save progress every N samples |
+| **docs_dir** | 39 | Any path | `"examples/accounting_docs"` | Folder with training documents |
+
+### Model Selection
+
+**Generator Models (Line 104):**
+
+| Model | Cost | Speed | Quality | Recommendation |
+|-------|------|-------|---------|----------------|
+| `claude-sonnet-4-5-20250929` | $$$ | Slow | Excellent | Production (complex responses) |
+| `claude-3-5-haiku-20241022` | $ | Fast | Good | Cost-effective (simpler responses) |
+| `gpt-4o-2024-08-06` | $$ | Medium | Very Good | Alternative to Sonnet |
+| `gpt-4o-mini-2024-07-18` | $ | Fast | Good | Budget option |
+
+**Cost Comparison (1500 samples):**
+- **Sonnet 4.5:** ~$16.50 (best quality)
+- **Haiku 3.5:** ~$4.00 (4x cheaper, good quality)
+- **GPT-4o-mini:** ~$2.50 (cheapest, decent quality)
+
+**Verifier Models (Line 105):**
+
+Recommendation: **Keep `gpt-4o-mini-2024-07-18`** - it's cheap ($0.150/M tokens) and accurate for quality scoring.
+
+### Dataset Types
+
+**SFT (Supervised Fine-Tuning)** - Line 100: `data_type="sft"`
+- Format: System/User/Assistant messages
+- Use case: Training conversational models
+- Example: Chatbot training data
+
+**DPO (Direct Preference Optimization)** - Line 100: `data_type="dpo"`
+- Format: Prompt + Chosen/Rejected responses
+- Use case: Aligning models to preferences
+- Example: Helpful vs unhelpful responses
+
+**Verifiable Q&A** - Line 100: `data_type="verifiable_qa"`
+- Format: Question + Ground truth answer
+- Use case: Training models with verifiable correctness
+- Example: Math problems, fact-based QA
+
+---
+
 ## Features
 
 - **Multiple Training Formats**: SFT, DPO, and verifiable Q&A
