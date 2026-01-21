@@ -168,39 +168,62 @@ SOURCE CONTENT:
 1. **FORMAT TYPE: DPO (Direct Preference Optimization) - Preference Format**
    Each sample has "prompt", "chosen", "rejected" fields
 
-2. EXAMPLE FORMAT:
+2. **TOKEN LENGTH TARGETS**:
+   - Chosen responses: 200-350 words (aim for ~250-400 tokens)
+   - Rejected responses: 150-300 words (aim for ~200-350 tokens)
+   - Both responses must be substantive and professional-looking
+
+3. EXAMPLE FORMAT:
 {{
   "prompt": "What is the journal entry for recording bad debt expense?",
   "chosen": "The journal entry is:\\nDR Bad Debt Expense $X\\n   CR Allowance for Doubtful Accounts $X\\n\\nThis follows the matching principle and is required under GAAP.",
   "rejected": "You just write off the bad debt when someone doesn't pay."
 }}
 
-3. **FEW-SHOT EXAMPLES OF APPROPRIATE DETAIL LEVEL**:
+4. **FEW-SHOT EXAMPLES OF APPROPRIATE DETAIL LEVEL**:
 
-EXAMPLE 1:
+EXAMPLE 1 (Rejection Type: Detailed but Erroneous - incorrect calculation):
 {{
   "prompt": "I bought a $35,000 piece of equipment for my manufacturing business. Should I use Section 179 or depreciate it over time?",
-  "chosen": "Section 179 allows you to deduct the full $35,000 immediately in 2024, giving you the largest first-year tax benefit.\\n\\nAlternatives:\\n1. Section 179: Deduct $35,000 now (requires sufficient income)\\n2. Bonus Depreciation: Deduct 60% ($21,000) in 2024, depreciate remaining $14,000 over 5-7 years\\n3. Regular MACRS: Spread $35,000 over 5-7 years\\n\\nRecommendation: Use Section 179 if you have the income for maximum immediate tax savings.\\n\\nSee IRS Publication 946, Chapter 2 for Section 179 rules.",
-  "rejected": "Just depreciate it over 5 years like normal equipment. Section 179 is complicated and not worth the hassle for most businesses."
+  "chosen": "Section 179 allows you to deduct the full $35,000 immediately in 2024, giving you the largest first-year tax benefit.\\n\\nAlternatives:\\n1. Section 179: Deduct $35,000 now (requires sufficient taxable income and phase-out begins at $1.16M in equipment purchases)\\n2. Bonus Depreciation: Deduct 60% ($21,000) in 2024, depreciate remaining $14,000 over 5-7 years using MACRS\\n3. Regular MACRS: Spread $35,000 over 5-7 years with declining balance method\\n\\nRecommendation: Use Section 179 if you have sufficient taxable income for maximum immediate tax savings. If your income is low this year, consider MACRS to spread the deduction.\\n\\nNote: Section 179 has a $1.22M deduction limit for 2024 and begins phasing out after $3.05M in total equipment purchases.\\n\\nSee IRS Publication 946, Chapter 2 for Section 179 rules and limitations.",
+  "rejected": "Section 179 is generally the best choice for equipment purchases under $50,000. You can deduct the full $35,000 immediately in 2024.\\n\\nAlternatives:\\n1. Section 179: Deduct $35,000 now\\n2. Bonus Depreciation: Deduct 80% ($28,000) in 2024, depreciate the remaining $7,000 over 5 years\\n3. Regular MACRS: Spread over 5-7 years\\n\\nThe main advantage of Section 179 is the immediate deduction, which improves cash flow and reduces your current tax liability. Unlike bonus depreciation, Section 179 has no income requirements, so you can use it regardless of your business's profitability.\\n\\nMost businesses choose Section 179 for simplicity and maximum first-year benefit. See IRS Publication 946 for details."
 }}
 
-EXAMPLE 2:
+EXAMPLE 2 (Rejection Type: Missing Critical Context - omits important exceptions):
 {{
   "prompt": "What is the difference between tangible and intangible property for depreciation purposes?",
-  "chosen": "Tangible property is physical property you can touch. Intangible property is non-physical property with value.\\n\\nTangible Property (depreciable):\\n- Equipment, machinery, vehicles\\n- Buildings and structures\\n- Depreciated under MACRS over 5-7 years\\n\\nIntangible Property (amortizable):\\n- Patents, copyrights, trademarks\\n- Goodwill, software, licenses\\n- Amortized over 15 years under Section 197\\n\\nExample: A $10,000 computer is tangible (5-year MACRS). A $10,000 software license is intangible (36-month amortization).\\n\\nSee IRS Publication 946 for tangible property.",
-  "rejected": "Tangible assets are things like equipment and buildings that you depreciate. Intangible assets are things like patents that don't depreciate."
+  "chosen": "Tangible property is physical property you can touch. Intangible property is non-physical property with value.\\n\\nTangible Property (depreciable):\\n- Equipment, machinery, vehicles (5-7 year MACRS)\\n- Buildings and structures (27.5 or 39 year straight-line)\\n- Furniture and fixtures (7 year MACRS)\\n- Must have determinable useful life\\n- Subject to depreciation recapture on sale\\n\\nIntangible Property (amortizable):\\n- Patents, copyrights, trademarks (life of asset or 15 years)\\n- Goodwill (15 years under Section 197)\\n- Software (36 months or Section 197)\\n- Customer lists, licenses (typically 15 years)\\n\\nKey Exception: Land is tangible but NOT depreciable (infinite useful life). Software can be either tangible (purchased) or intangible (licensed) affecting the amortization method.\\n\\nExample: A $10,000 computer is tangible (5-year MACRS). A $10,000 software license is intangible (36-month straight-line amortization).\\n\\nSee IRS Publication 946 for tangible property rules and Publication 535 for intangibles.",
+  "rejected": "Tangible property is physical property you can touch and see. Intangible property is non-physical property that has economic value.\\n\\nTangible Property (depreciable):\\n- Equipment, machinery, vehicles\\n- Buildings and structures\\n- Furniture and office equipment\\n- Depreciated under MACRS over varying recovery periods (5-7 years for equipment, 27.5-39 years for real property)\\n\\nIntangible Property (amortizable):\\n- Patents, copyrights, trademarks\\n- Goodwill from business acquisitions\\n- Software and licenses\\n- Customer lists and contracts\\n- Amortized over 15 years under Section 197 or the legal life of the asset\\n\\nThe main practical difference is the recovery method: tangible assets use MACRS with accelerated depreciation methods, while intangible assets typically use straight-line amortization over their useful life.\\n\\nExample: A $10,000 computer (tangible) is depreciated using 5-year MACRS. A $10,000 patent (intangible) is amortized over 15 years or its legal life, whichever is shorter."
 }}
 
-Your responses should match this level of detail - the 'chosen' response should be CONCISE but comprehensive with key examples and calculations (150-250 words), while the 'rejected' response should be incomplete, oversimplified, or missing key details.
+EXAMPLE 3 (Rejection Type: Plausibly Wrong Reasoning - sounds logical but incorrect):
+{{
+  "prompt": "How do I account for prepaid insurance that covers 12 months starting January 1st?",
+  "chosen": "Prepaid insurance is an asset that must be expensed over the coverage period using monthly adjusting entries.\\n\\nInitial Entry (January 1):\\nDR Prepaid Insurance $12,000\\n   CR Cash $12,000\\n(Record 12-month insurance payment)\\n\\nMonthly Adjusting Entry (end of each month):\\nDR Insurance Expense $1,000\\n   CR Prepaid Insurance $1,000\\n(Recognize 1/12 of annual premium: $12,000 ÷ 12 = $1,000)\\n\\nThis follows the matching principle under GAAP - expenses must be recognized in the period they benefit, not when cash is paid.\\n\\nBy December 31st, Prepaid Insurance will have a $0 balance (fully expensed) and Insurance Expense will show $12,000 total for the year.\\n\\nAlternative: Some small businesses expense the full amount immediately for simplicity, but this violates GAAP and distorts monthly financial statements.",
+  "rejected": "Prepaid insurance should be recorded as an asset initially, then expensed proportionally each month based on the coverage period.\\n\\nInitial Entry (January 1):\\nDR Prepaid Insurance $12,000\\n   CR Cash $12,000\\n(Record 12-month insurance payment)\\n\\nMonthly Adjusting Entry:\\nDR Insurance Expense $1,000\\n   CR Prepaid Insurance $1,000\\n\\nHowever, since insurance provides continuous protection, you could argue that the benefit is realized immediately upon payment rather than over time. Some accountants prefer to expense the full amount when paid since the risk coverage begins immediately:\\n\\nAlternative Entry (January 1):\\nDR Insurance Expense $12,000\\n   CR Cash $12,000\\n\\nBoth methods are acceptable under GAAP depending on your company's materiality policy. The immediate expense method is simpler and aligns the expense with the cash outflow, which can be beneficial for cash flow analysis and budgeting purposes."
+}}
 
-4. **CONTENT SOURCE**: Pull questions/examples DIRECTLY from source material above
+**CRITICAL LENGTH AND QUALITY REQUIREMENTS:**
 
-5. **PREFERENCE STRATEGY**: {self.preference_strategy}
+- **Chosen response**: 200-350 words - comprehensive, accurate, well-structured with specific examples, calculations, and references
+- **Rejected response**: 150-300 words - MUST be substantive and detailed, but contains one of these subtle flaws:
+
+  **Rejection Types (mix these throughout your responses):**
+  a) **Detailed but Erroneous**: Provides thorough explanation with specific details, but contains factual errors, incorrect calculations, or misapplied principles (40% of samples)
+  b) **Missing Critical Context**: Comprehensive response that appears correct but omits essential caveats, exceptions, or important considerations (30% of samples)
+  c) **Plausibly Wrong Reasoning**: Well-structured answer with logical-sounding but flawed reasoning or incorrect interpretation (20% of samples)
+  d) **Vague/Oversimplified**: Lacks necessary detail or specificity despite being somewhat lengthy (10% of samples)
+
+**KEY POINT**: Rejected responses should NOT be obviously wrong at first glance. They should look professional and detailed, making the error subtle enough that it requires domain knowledge to identify the flaw.
+
+5. **CONTENT SOURCE**: Pull questions/examples DIRECTLY from source material above
+
+6. **PREFERENCE STRATEGY**: {self.preference_strategy}
 {strategy_instructions}
 
-6. Generate EXACTLY {batch_size} samples about "{topic} → {subtopic}"
+7. Generate EXACTLY {batch_size} samples about "{topic} → {subtopic}"
 
-7. Difficulty: {batch_size//3} basic, {batch_size//3} intermediate, {batch_size//3} advanced
+8. Difficulty: {batch_size//3} basic, {batch_size//3} intermediate, {batch_size//3} advanced
 
 Return JSON array: [{{"prompt": "...", "chosen": "...", "rejected": "..."}}, ...]
 ONLY JSON, no other text.
@@ -377,20 +400,20 @@ Return ONLY the JSON array, no other text.
         if self.preference_strategy == "quality":
             return """
 **Quality Strategy:**
-- Chosen: Accurate, complete, well-structured, professional
-- Rejected: Less accurate, incomplete, poorly structured, or vague
+- Chosen: Accurate, complete, well-structured, professional with specific examples and proper citations
+- Rejected: Appears detailed and professional but contains subtle errors (wrong formulas, incorrect principles, missing critical exceptions, or flawed reasoning). Should be 70-80% as good as chosen - NOT obviously wrong.
 """
         elif self.preference_strategy == "style":
             return """
 **Style Strategy:**
-- Chosen: Professional, formal, appropriate tone
-- Rejected: Too casual, informal, or inappropriate tone (but not completely wrong)
+- Chosen: Professional, formal, appropriate tone with clear structure
+- Rejected: Detailed response but with tone issues (overly casual, uses slang, inappropriate analogies) or poor organization (but factually similar to chosen)
 """
         elif self.preference_strategy == "length":
             return """
 **Length Strategy:**
-- Chosen: Comprehensive, detailed, thorough explanation
-- Rejected: Too brief, lacks detail, or oversimplified (but not incorrect)
+- Chosen: Comprehensive, detailed, thorough explanation (200-350 words)
+- Rejected: Still substantial (150-250 words) but lacks some important details, examples, or nuance that makes chosen more valuable
 """
         else:
             return ""
