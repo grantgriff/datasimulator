@@ -12,6 +12,9 @@ from .core.data_models import (
     DPOMessages,
     PPOPrompt,
     GRPOPrompt,
+    RankedResponse,
+    RankedSample,
+    FullSample,
     RLVerifiable,
 )
 from .sources.document_loader import DocumentLoader, load_document
@@ -33,6 +36,9 @@ __all__ = [
     "DPOMessages",
     "PPOPrompt",
     "GRPOPrompt",
+    "RankedResponse",
+    "RankedSample",
+    "FullSample",
     "RLVerifiable",
     "QualityScorer",
     "QualityFilter",

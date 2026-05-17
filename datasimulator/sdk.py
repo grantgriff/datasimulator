@@ -20,6 +20,8 @@ from .core.models.llm_client import ModelRouter
 from .core.generators.sft_generator import SFTGenerator
 from .core.generators.dpo_generator import DPOGenerator
 from .core.generators.verifiable_qa_generator import VerifiableQAGenerator
+from .core.generators.ranked_generator import RankedGenerator
+from .core.generators.full_generator import FullGenerator
 from .utils.cost_tracker import CostTracker
 from .sources.document_loader import DocumentLoader, load_document
 from .sources.base_loader import LoaderException
@@ -222,7 +224,7 @@ class DataSimulator:
     def __init__(
         self,
         source: Optional[Union[str, List[str]]] = None,
-        data_type: Literal["sft", "dpo", "verifiable_qa"] = "sft",
+        data_type: Literal["sft", "dpo", "verifiable_qa", "ranked", "full"] = "sft",
         models: Optional[Dict[str, str]] = None,
         quality_threshold: float = 6.0,
         diversity_threshold: float = 0.85,
@@ -233,6 +235,7 @@ class DataSimulator:
         checkpoint_dir: Optional[str] = None,
         checkpoint_interval: int = 20,
         enable_planning: bool = False,
+        ranked_config: Optional[Dict[str, Any]] = None,
         google_api_key: Optional[str] = None,
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
@@ -256,6 +259,10 @@ class DataSimulator:
             checkpoint_dir: Directory to save checkpoints (optional)
             checkpoint_interval: Save checkpoint every N samples (default: 20)
             enable_planning: Use Gemini to analyze sources and create generation plan
+            ranked_config: Configuration for data_type="ranked" and "full":
+                - num_responses (int, default 4): responses per prompt
+                - quality_spread ("wide"|"narrow", default "wide"): target gap
+                  between best/worst response scores
             google_api_key: Google API key for Gemini planning (or use GOOGLE_API_KEY env)
             anthropic_api_key: Anthropic API key (or use ANTHROPIC_API_KEY env)
             openai_api_key: OpenAI API key (or use OPENAI_API_KEY env)
@@ -266,6 +273,7 @@ class DataSimulator:
         self.parallel_batches = parallel_batches
         self.quality_threshold = quality_threshold
         self.diversity_threshold = diversity_threshold
+        self.ranked_config = ranked_config or {}
 
         # Store source files list for planner
         self.source_files = [source] if isinstance(source, str) else (source if source else [])
@@ -323,6 +331,48 @@ class DataSimulator:
         logger.info(f"DataSimulator initialized for {data_type.upper()} generation")
         logger.info(f"Generator: {generator_model}")
         logger.info(f"Verifier: {verifier_model}")
+
+    def _validate_topic_emphasis(
+        self,
+        topic_emphasis: Optional[Dict[str, float]]
+    ) -> Optional[Dict[str, float]]:
+        """
+        Validate and normalize topic_emphasis input.
+
+        Rejects bad shapes; warns when planning is disabled (in which case
+        the emphasis cannot be applied and is dropped).
+        """
+        if topic_emphasis is None:
+            return None
+
+        if not isinstance(topic_emphasis, dict) or not topic_emphasis:
+            raise ValueError(
+                "topic_emphasis must be a non-empty dict of {topic: weight}"
+            )
+
+        for topic, weight in topic_emphasis.items():
+            if not isinstance(topic, str) or not topic.strip():
+                raise ValueError(f"topic_emphasis keys must be non-empty strings (got {topic!r})")
+            if not isinstance(weight, (int, float)) or weight <= 0 or weight > 1:
+                raise ValueError(
+                    f"topic_emphasis weight for {topic!r} must be in (0, 1], got {weight}"
+                )
+
+        total = sum(topic_emphasis.values())
+        # Allow tiny floating-point slack above 1.0
+        if total > 1.0 + 1e-6:
+            raise ValueError(
+                f"topic_emphasis weights must sum to <= 1.0, got {total:.4f}"
+            )
+
+        if not self.enable_planning:
+            logger.warning(
+                "topic_emphasis was provided but enable_planning=False; "
+                "emphasis will be ignored. Pass enable_planning=True to apply."
+            )
+            return None
+
+        return topic_emphasis
 
     def _load_source(self) -> tuple[str, Dict[str, str]]:
         """
@@ -403,7 +453,8 @@ class DataSimulator:
         num_samples: int,
         domain_context: Optional[str] = None,
         enable_human_review: bool = False,
-        show_progress: bool = True
+        show_progress: bool = True,
+        topic_emphasis: Optional[Dict[str, float]] = None
     ) -> GeneratedDataset:
         """
         Generate training dataset.
@@ -413,10 +464,19 @@ class DataSimulator:
             domain_context: Optional domain-specific context
             enable_human_review: Enable manual review of samples
             show_progress: Show generation progress
+            topic_emphasis: Optional dict mapping topic strings to weights (0-1).
+                When provided alongside enable_planning=True, biases the Gemini
+                planner toward allocating more batches to the weighted topics.
+                Values must sum to <= 1.0 (remainder distributed across other
+                topics naturally extracted from sources). Ignored with a warning
+                when enable_planning=False.
 
         Returns:
             GeneratedDataset object with samples and analytics
         """
+        # Validate topic_emphasis
+        topic_emphasis = self._validate_topic_emphasis(topic_emphasis)
+
         # Create generation plan if planning is enabled
         generation_plan = None
         if self.enable_planning and self.planner and self.source_content:
@@ -428,7 +488,8 @@ class DataSimulator:
                     total_samples=num_samples,
                     data_type=self.data_type,
                     source_files=self.source_files,
-                    batch_size=self.batch_size
+                    batch_size=self.batch_size,
+                    topic_emphasis=topic_emphasis
                 )
             )
             logger.info(f"✓ Plan created: {generation_plan.get('num_batches', 0)} batches")
@@ -474,10 +535,30 @@ class DataSimulator:
                 source_content=self.source_content,
                 source_content_by_file=self.source_content_by_file
             )
+        elif self.data_type == "ranked":
+            generator = RankedGenerator(
+                num_responses=self.ranked_config.get("num_responses", 4),
+                quality_spread=self.ranked_config.get("quality_spread", "wide"),
+                model_router=self.model_router,
+                cost_tracker=self.cost_tracker,
+                config=config,
+                source_content=self.source_content,
+                source_content_by_file=self.source_content_by_file
+            )
+        elif self.data_type == "full":
+            generator = FullGenerator(
+                num_responses=self.ranked_config.get("num_responses", 4),
+                quality_spread=self.ranked_config.get("quality_spread", "wide"),
+                model_router=self.model_router,
+                cost_tracker=self.cost_tracker,
+                config=config,
+                source_content=self.source_content,
+                source_content_by_file=self.source_content_by_file
+            )
         else:
             raise ValueError(
                 f"Unknown data type: {self.data_type}. "
-                f"Supported types: sft, dpo, verifiable_qa"
+                f"Supported types: sft, dpo, verifiable_qa, ranked, full"
             )
 
         # Generate samples (using asyncio) with checkpointing and optional plan

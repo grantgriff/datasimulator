@@ -123,6 +123,87 @@ class GRPOPrompt(BaseModel):
 
 
 # ============================================================================
+# Ranked (multi-response per prompt for GRPO / unified training)
+# ============================================================================
+
+
+class RankedResponse(BaseModel):
+    """A single response within a ranked group, with its assigned rank and verifier score."""
+    rank: int = Field(ge=1, description="1-indexed rank (1 = best)")
+    text: str = Field(min_length=1)
+    quality_score: float = Field(ge=0.0, le=10.0)
+
+    model_config = {"frozen": True}
+
+
+class RankedSample(BaseModel):
+    """
+    Ranked-responses format: one prompt with N responses sorted by verifier quality.
+
+    Used for GRPO training and as the building block for the "full" data type
+    (which exposes the same record as SFT + DPO + GRPO views).
+    """
+    prompt: str = Field(min_length=1)
+    ranked_responses: List[RankedResponse] = Field(min_length=2)
+    topic: Optional[str] = Field(default=None)
+    subtopic: Optional[str] = Field(default=None)
+
+    @field_validator("ranked_responses")
+    @classmethod
+    def validate_ranks(cls, v: List[RankedResponse]) -> List[RankedResponse]:
+        """Ensure ranks are 1..N contiguous and sorted ascending (rank 1 first)."""
+        if not v:
+            raise ValueError("ranked_responses cannot be empty")
+
+        ranks = [r.rank for r in v]
+        expected = list(range(1, len(v) + 1))
+        if sorted(ranks) != expected:
+            raise ValueError(
+                f"ranked_responses must have ranks 1..{len(v)}; got {ranks}"
+            )
+
+        # Must be sorted with rank 1 first
+        if ranks != expected:
+            raise ValueError("ranked_responses must be sorted with rank 1 first")
+
+        # Quality scores must be monotonically non-increasing
+        scores = [r.quality_score for r in v]
+        for i in range(len(scores) - 1):
+            if scores[i] < scores[i + 1]:
+                raise ValueError(
+                    f"quality_score must be non-increasing by rank; "
+                    f"rank {i+1}={scores[i]} < rank {i+2}={scores[i+1]}"
+                )
+
+        return v
+
+
+class FullSample(BaseModel):
+    """
+    Unified format that carries SFT, DPO, and GRPO views on a single record.
+
+    - `gold_answer` is the SFT view (= rank-1 text)
+    - `chosen` / `rejected` are the DPO view (rank-1 / rank-N text)
+    - `ranked_responses` is the GRPO view
+
+    "Generate once, use everywhere."
+    """
+    prompt: str = Field(min_length=1)
+    gold_answer: str = Field(min_length=1)
+    chosen: str = Field(min_length=1)
+    rejected: str = Field(min_length=1)
+    ranked_responses: List[RankedResponse] = Field(min_length=2)
+    topic: Optional[str] = Field(default=None)
+    subtopic: Optional[str] = Field(default=None)
+
+    @field_validator("ranked_responses")
+    @classmethod
+    def validate_ranks(cls, v: List[RankedResponse]) -> List[RankedResponse]:
+        """Reuse the same rank invariants as RankedSample."""
+        return RankedSample.validate_ranks(v)
+
+
+# ============================================================================
 # RL with Verifiable Rewards
 # ============================================================================
 
@@ -176,6 +257,8 @@ class DatasetSample(BaseModel):
         DPOMessages,
         PPOPrompt,
         GRPOPrompt,
+        RankedSample,
+        FullSample,
         RLVerifiable
     ]
     metrics: QualityMetrics
@@ -252,5 +335,7 @@ TrainingDataFormat = Union[
     DPOMessages,
     PPOPrompt,
     GRPOPrompt,
+    RankedSample,
+    FullSample,
     RLVerifiable
 ]

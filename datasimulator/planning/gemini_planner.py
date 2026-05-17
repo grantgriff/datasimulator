@@ -211,7 +211,8 @@ class GeminiPlanner:
         total_samples: int,
         data_type: str = "sft",
         source_files: Optional[List[str]] = None,
-        batch_size: int = 20
+        batch_size: int = 20,
+        topic_emphasis: Optional[Dict[str, float]] = None
     ) -> Dict[str, Any]:
         """
         Analyze sources and create batch-level generation plan.
@@ -222,6 +223,10 @@ class GeminiPlanner:
             data_type: Type of training data (sft, dpo, etc.)
             source_files: List of source file names (optional)
             batch_size: Number of samples per batch (default: 20)
+            topic_emphasis: Optional dict mapping topic strings to weights (0-1).
+                When provided, the planner is instructed to bias batch allocation
+                toward these topics. Weights are interpreted as the target
+                fraction of total samples for each topic.
 
         Returns:
             Dictionary with:
@@ -237,13 +242,65 @@ class GeminiPlanner:
         logger.info(f"Plan will have {num_batches} batches of {batch_size} samples each")
         logger.info(f"Analyzing {len(source_content):,} characters of source content")
 
+        if topic_emphasis:
+            emphasis_summary = ", ".join(f"{t}={w:.0%}" for t, w in topic_emphasis.items())
+            logger.info(f"Applying topic emphasis: {emphasis_summary}")
+
         # Handle large documents with chunking
         if len(source_content) > self.max_chars:
             logger.warning(f"Content exceeds {self.max_chars:,} chars, using chunked analysis")
-            return await self._create_plan_chunked(source_content, total_samples, data_type, source_files, batch_size)
+            return await self._create_plan_chunked(
+                source_content, total_samples, data_type, source_files, batch_size, topic_emphasis
+            )
 
         # Single-pass planning for smaller documents
-        return await self._create_plan_single(source_content, total_samples, data_type, source_files, batch_size)
+        return await self._create_plan_single(
+            source_content, total_samples, data_type, source_files, batch_size, topic_emphasis
+        )
+
+    def _build_emphasis_section(
+        self,
+        topic_emphasis: Optional[Dict[str, float]],
+        num_batches: int
+    ) -> str:
+        """
+        Build the planning-prompt section that instructs Gemini to bias
+        batch allocation toward weighted topics.
+        """
+        if not topic_emphasis:
+            return ""
+
+        lines = []
+        explicit_weight = 0.0
+        for topic, weight in topic_emphasis.items():
+            batches_for_topic = max(1, round(weight * num_batches))
+            lines.append(
+                f"  - \"{topic}\": target {weight:.0%} of samples "
+                f"(~{batches_for_topic} of {num_batches} batches)"
+            )
+            explicit_weight += weight
+
+        remainder = max(0.0, 1.0 - explicit_weight)
+        remainder_clause = (
+            f"The remaining {remainder:.0%} of batches should cover OTHER topics naturally extracted from the source material."
+            if remainder > 0.01
+            else "Allocate ALL batches across the weighted topics above; do not introduce other major topics."
+        )
+
+        return f"""
+
+=== TOPIC EMPHASIS (USER-SPECIFIED ALLOCATION) ===
+
+The user has explicitly requested that the following topics receive WEIGHTED ALLOCATION in the batch plan:
+{chr(10).join(lines)}
+
+{remainder_clause}
+
+REQUIREMENTS:
+- For each weighted topic above, the "topic" field in batches dedicated to that topic MUST contain the EXACT topic string (case-sensitive substring match is OK).
+- If a weighted topic is not clearly covered in the source material, still allocate batches to it but note this in the guidance field (e.g., "limited source coverage — extrapolate carefully").
+- Do not exceed the requested weight by more than 20% for any single topic.
+"""
 
     async def _create_plan_single(
         self,
@@ -251,12 +308,14 @@ class GeminiPlanner:
         total_samples: int,
         data_type: str,
         source_files: Optional[List[str]] = None,
-        batch_size: int = 20
+        batch_size: int = 20,
+        topic_emphasis: Optional[Dict[str, float]] = None
     ) -> Dict[str, Any]:
         """Create batch-level plan with single Gemini API call."""
 
         file_list = "\n".join([f"  - {f}" for f in source_files]) if source_files else "Multiple source files"
         num_batches = (total_samples + batch_size - 1) // batch_size  # Ceiling division
+        emphasis_section = self._build_emphasis_section(topic_emphasis, num_batches)
 
         planning_prompt = f"""
 You are an expert at analyzing technical documents and creating detailed training data generation plans.
@@ -268,7 +327,7 @@ SOURCE FILES:
 
 SOURCE CONTENT:
 {source_content[:self.max_chars]}
-
+{emphasis_section}
 REQUIREMENTS:
 1. Provide a brief review of the source files (1-2 paragraphs)
 2. Create EXACTLY {num_batches} batches (each batch generates {batch_size} samples)
@@ -356,7 +415,8 @@ Provide ONLY the JSON output, nothing else.
         total_samples: int,
         data_type: str,
         source_files: Optional[List[str]] = None,
-        batch_size: int = 20
+        batch_size: int = 20,
+        topic_emphasis: Optional[Dict[str, float]] = None
     ) -> Dict[str, Any]:
         """
         Create batch-level plan for large documents using chunked analysis.
@@ -384,7 +444,9 @@ Provide ONLY the JSON output, nothing else.
         logger.info(f"✓ All chunks summarized. Combined: {len(combined_summary):,} characters")
 
         # Now create batch plan from summaries
-        return await self._create_plan_single(combined_summary, total_samples, data_type, source_files, batch_size)
+        return await self._create_plan_single(
+            combined_summary, total_samples, data_type, source_files, batch_size, topic_emphasis
+        )
 
     async def _summarize_chunk(self, chunk: str, chunk_num: int, total_chunks: int) -> str:
         """
