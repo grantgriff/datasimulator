@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 from datasimulator import DataSimulator
 
-load_dotenv()
+load_dotenv(override=True)
 
 src = Path("/tmp/accounting_blurb.txt")
 src.write_text(
