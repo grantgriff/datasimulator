@@ -46,6 +46,7 @@ class GeminiPlanner:
 
         try:
             from google import genai
+            from google.genai import types as genai_types
         except ImportError:
             raise ImportError(
                 "google-genai package not installed. "
@@ -60,6 +61,13 @@ class GeminiPlanner:
 
         self._client = genai.Client(api_key=self.api_key)
         self._model_name = model
+        self._types = genai_types
+        # Disable thinking on 2.5+ models — planning prompts ask for JSON,
+        # not chain-of-thought, and thinking burns rate-limit budget.
+        ThinkingConfig = getattr(genai_types, "ThinkingConfig", None)
+        self._gen_config = genai_types.GenerateContentConfig(
+            thinking_config=ThinkingConfig(thinking_budget=0) if ThinkingConfig else None,
+        )
 
         # Gemini 2.5 Flash context window is ~1M tokens; leave buffer.
         self.max_chars = 1_500_000  # ~375K tokens
@@ -385,6 +393,7 @@ Provide ONLY the JSON output, nothing else.
             response = await self._client.aio.models.generate_content(
                 model=self._model_name,
                 contents=planning_prompt,
+                config=self._gen_config,
             )
             plan_text = (response.text or "").strip()
 
@@ -486,6 +495,7 @@ Keep summary to 3-5 paragraphs maximum.
             response = await self._client.aio.models.generate_content(
                 model=self._model_name,
                 contents=summary_prompt,
+                config=self._gen_config,
             )
             logger.info(f"✓ Chunk {chunk_num} summarized")
             return (response.text or "").strip()

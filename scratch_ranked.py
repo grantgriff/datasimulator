@@ -37,14 +37,14 @@ sdk = DataSimulator(
     data_type="ranked",
     enable_planning=True,
     ranked_config={"num_responses": 3, "quality_spread": "wide"},
-    batch_size=4,
+    batch_size=2,           # Small batch keeps us under free-tier 5 RPM
     parallel_batches=1,
     max_cost=1.00,
     interactive=False,
 )
 
 ds = sdk.generate(
-    num_samples=4,
+    num_samples=2,           # 1 planner + 1 generator + 2 verifier = 4 calls
     topic_emphasis={"ASC 606 revenue recognition": 0.5},
 )
 

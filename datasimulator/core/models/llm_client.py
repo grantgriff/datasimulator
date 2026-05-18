@@ -278,17 +278,40 @@ class GeminiClient(BaseLLMClient):
         prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        thinking_budget: int = 0,
         **kwargs
     ) -> str:
-        """Generate text using Gemini."""
+        """
+        Generate text using Gemini.
+
+        Args:
+            prompt: User prompt.
+            temperature: Sampling temperature.
+            max_tokens: Max output tokens. With thinking enabled, this budget
+                is shared between thinking and the final response, so set it
+                generously or disable thinking.
+            thinking_budget: Thinking tokens for Gemini 2.5+ "thinking" models.
+                Defaults to 0 (disabled) — our prompts ask for JSON or short
+                scores, so thinking wastes tokens and burns rate-limit budget.
+                Pass -1 for dynamic thinking, or a positive int for a fixed
+                thinking budget.
+        """
         try:
+            cfg_kwargs = {
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+            }
+            # Only attach a thinking_config for models that support it (2.5+).
+            # For older models the field is silently ignored by the API, but
+            # we still avoid the import-time cost if ThinkingConfig is absent.
+            ThinkingConfig = getattr(self._types, "ThinkingConfig", None)
+            if ThinkingConfig is not None:
+                cfg_kwargs["thinking_config"] = ThinkingConfig(thinking_budget=thinking_budget)
+
             response = await self._client.aio.models.generate_content(
                 model=self._model_name,
                 contents=prompt,
-                config=self._types.GenerateContentConfig(
-                    temperature=temperature,
-                    max_output_tokens=max_tokens,
-                ),
+                config=self._types.GenerateContentConfig(**cfg_kwargs),
             )
 
             # Track token usage
