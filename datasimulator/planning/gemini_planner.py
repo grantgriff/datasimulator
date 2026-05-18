@@ -28,7 +28,7 @@ class GeminiPlanner:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-2.5-pro",
+        model: str = "gemini-2.5-flash",
         chunk_overlap: float = 0.1
     ):
         """
@@ -36,7 +36,10 @@ class GeminiPlanner:
 
         Args:
             api_key: Google API key (or uses GOOGLE_API_KEY env var)
-            model: Gemini model to use (pro for 1M+ token context)
+            model: Gemini model to use. Default is gemini-2.5-flash for
+                free-tier accessibility and low cost; override to
+                gemini-2.5-pro for stronger planning over very large
+                documents if your project has Pro quota.
             chunk_overlap: Fraction of chunk to overlap with next (0.0-0.5, default 0.1 = 10%)
         """
         import os
@@ -58,7 +61,7 @@ class GeminiPlanner:
         self._client = genai.Client(api_key=self.api_key)
         self._model_name = model
 
-        # Gemini 2.5 Pro context window is ~2M tokens; leave buffer.
+        # Gemini 2.5 Flash context window is ~1M tokens; leave buffer.
         self.max_chars = 1_500_000  # ~375K tokens
         self.chunk_overlap = max(0.0, min(0.5, chunk_overlap))  # Clamp to 0-50%
 

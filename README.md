@@ -237,7 +237,7 @@ source = [
 | Model | Cost ($/1M in / out) | Speed | Quality | Recommendation |
 |-------|------|-------|---------|----------------|
 | `gemini-2.5-flash` | $0.30 / $2.50 | Very Fast | Very Good | **DEFAULT** — stable GA, single-provider |
-| `gemini-2.5-pro` | $1.25 / $10.00 | Medium | Excellent | Strategic / planning (used by the planner) |
+| `gemini-2.5-pro` | $1.25 / $10.00 | Medium | Excellent | Optional override for stronger planning if your project has Pro quota |
 | `gemini-2.5-flash-lite` | $0.10 / $0.40 | Very Fast | Good | Cheapest tier |
 | `claude-sonnet-4-5-20250929` | $$$ | Slow | Excellent | Premium (complex responses) |
 | `gpt-4o-mini-2024-07-18` | $0.15 / $0.60 | Fast | Good | OpenAI budget option |
@@ -248,7 +248,15 @@ Recommendation: **Keep `gemini-2.5-flash`** — same model family as the generat
 
 **Planner Model:**
 
-The optional Gemini planning layer (`enable_planning=True`) uses **`gemini-2.5-pro`** — it's strategic (one call per `generate()` to analyze whole documents and build the batch plan), so the higher cost is justified.
+The optional Gemini planning layer (`enable_planning=True`) defaults to **`gemini-2.5-flash`** — free-tier accessible and plenty good for batch planning. If you have Pro quota and want stronger reasoning over very large documents, override:
+
+```python
+sdk = DataSimulator(
+    enable_planning=True,
+    models={"planner": "gemini-2.5-pro"},
+    ...
+)
+```
 
 ### Dataset Types
 
