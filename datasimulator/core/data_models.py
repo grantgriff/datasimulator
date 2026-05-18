@@ -298,16 +298,20 @@ class Dataset(BaseModel):
 class ModelConfig(BaseModel):
     """Configuration for different model roles."""
     generator: str = Field(
-        default="gemini-2.5-flash",
-        description="Model for main data generation"
+        default="gpt-5.4-mini",
+        description="Model for main data generation (fast, capable)"
     )
     verifier: str = Field(
-        default="gemini-2.5-flash",
-        description="Model for quality verification"
+        default="gpt-4.1-nano",
+        description="Model for quality verification (cheap, simple scoring)"
     )
     diversity: str = Field(
-        default="gemini-2.5-flash",
-        description="Model for diversity checks (can be local)"
+        default="gpt-4.1-nano",
+        description="Model for diversity checks"
+    )
+    planner: str = Field(
+        default="gpt-5.4",
+        description="Model for strategic planning (one call per generate())"
     )
 
 

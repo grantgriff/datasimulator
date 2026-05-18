@@ -168,8 +168,22 @@ class ClaudeClient(BaseLLMClient):
 class OpenAIClient(BaseLLMClient):
     """OpenAI API client."""
 
-    # Pricing per 1M tokens (as of Jan 2025)
+    # Pricing per 1M tokens (refreshed May 2026)
     PRICING = {
+        # GPT-5.5 family
+        "gpt-5.5": {"input": 5.00, "output": 30.00},
+        "gpt-5.5-pro": {"input": 30.00, "output": 180.00},
+        # GPT-5.4 family
+        "gpt-5.4": {"input": 2.50, "output": 15.00},
+        "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
+        "gpt-5.4-nano": {"input": 0.20, "output": 1.25},
+        # GPT-4.1 family
+        "gpt-4.1": {"input": 2.00, "output": 8.00},
+        "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
+        "gpt-4.1-nano": {"input": 0.10, "output": 0.40},
+        # Reasoning models
+        "o4-mini": {"input": 0.55, "output": 2.20},
+        # Legacy entries kept for callers still pinning these strings
         "gpt-4o": {"input": 2.50, "output": 10.00},
         "gpt-4o-mini": {"input": 0.150, "output": 0.600},
         "gpt-4-turbo": {"input": 10.00, "output": 30.00},
@@ -486,9 +500,9 @@ class ModelRouter:
 
     def __init__(
         self,
-        generator_model: str = "gemini-2.5-flash",
-        verifier_model: str = "gemini-2.5-flash",
-        diversity_model: str = "gemini-2.5-flash",
+        generator_model: str = "gpt-5.4-mini",
+        verifier_model: str = "gpt-4.1-nano",
+        diversity_model: str = "gpt-4.1-nano",
         **api_keys
     ):
         self.generator = UnifiedLLMClient(generator_model, **api_keys)

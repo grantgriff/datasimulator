@@ -292,9 +292,9 @@ class DataSimulator:
 
         # Setup models
         model_config = models or {}
-        generator_model = model_config.get("generator", "gemini-2.5-flash")
-        verifier_model = model_config.get("verifier", "gemini-2.5-flash")
-        diversity_model = model_config.get("diversity", "gemini-2.5-flash")
+        generator_model = model_config.get("generator", "gpt-5.4-mini")
+        verifier_model = model_config.get("verifier", "gpt-4.1-nano")
+        diversity_model = model_config.get("diversity", "gpt-4.1-nano")
 
         self.model_router = ModelRouter(
             generator_model=generator_model,
@@ -316,8 +316,13 @@ class DataSimulator:
         if enable_planning:
             try:
                 from .planning import GeminiPlanner
-                planner_model = model_config.get("planner", "gemini-2.5-flash")
-                self.planner = GeminiPlanner(api_key=google_api_key, model=planner_model)
+                planner_model = model_config.get("planner", "gpt-5.4")
+                self.planner = GeminiPlanner(
+                    model=planner_model,
+                    anthropic_api_key=anthropic_api_key,
+                    openai_api_key=openai_api_key,
+                    google_api_key=google_api_key,
+                )
                 logger.info(f"Gemini planning enabled (model={planner_model})")
             except Exception as e:
                 logger.warning(f"Failed to initialize Gemini planner: {e}")

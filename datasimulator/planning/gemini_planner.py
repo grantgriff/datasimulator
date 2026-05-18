@@ -28,52 +28,51 @@ class GeminiPlanner:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-2.5-flash",
-        chunk_overlap: float = 0.1
+        model: str = "gpt-5.4",
+        chunk_overlap: float = 0.1,
+        anthropic_api_key: Optional[str] = None,
+        openai_api_key: Optional[str] = None,
+        google_api_key: Optional[str] = None,
     ):
         """
-        Initialize Gemini planner.
+        Initialize the LLM-backed planner.
+
+        Provider is detected from the model name prefix:
+            gpt-*    → OpenAI
+            claude-* → Anthropic
+            gemini-* → Google
 
         Args:
-            api_key: Google API key (or uses GOOGLE_API_KEY env var)
-            model: Gemini model to use. Default is gemini-2.5-flash for
-                free-tier accessibility and low cost; override to
-                gemini-2.5-pro for stronger planning over very large
-                documents if your project has Pro quota.
-            chunk_overlap: Fraction of chunk to overlap with next (0.0-0.5, default 0.1 = 10%)
+            api_key: Convenience param — auto-routes to the matching provider
+                key slot based on the model prefix. Pass `openai_api_key=` etc.
+                explicitly if you need finer control.
+            model: Model name (default: gpt-5.4).
+            chunk_overlap: Fraction of chunk to overlap with next (0.0-0.5).
         """
-        import os
+        from ..core.models.llm_client import UnifiedLLMClient
 
-        try:
-            from google import genai
-            from google.genai import types as genai_types
-        except ImportError:
-            raise ImportError(
-                "google-genai package not installed. "
-                "Install with: pip install google-genai"
-            )
+        # Route the convenience `api_key` to the correct provider slot
+        keys = {
+            "anthropic_api_key": anthropic_api_key,
+            "openai_api_key": openai_api_key,
+            "google_api_key": google_api_key,
+        }
+        if api_key and not any(keys.values()):
+            if model.startswith("claude"):
+                keys["anthropic_api_key"] = api_key
+            elif model.startswith("gemini"):
+                keys["google_api_key"] = api_key
+            else:  # gpt-* and default
+                keys["openai_api_key"] = api_key
 
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
-        if not self.api_key:
-            raise ValueError(
-                "Google API key required. Set GOOGLE_API_KEY env variable or pass api_key"
-            )
-
-        self._client = genai.Client(api_key=self.api_key)
+        self._llm = UnifiedLLMClient(model, **keys)
         self._model_name = model
-        self._types = genai_types
-        # Disable thinking on 2.5+ models — planning prompts ask for JSON,
-        # not chain-of-thought, and thinking burns rate-limit budget.
-        ThinkingConfig = getattr(genai_types, "ThinkingConfig", None)
-        self._gen_config = genai_types.GenerateContentConfig(
-            thinking_config=ThinkingConfig(thinking_budget=0) if ThinkingConfig else None,
-        )
 
-        # Gemini 2.5 Flash context window is ~1M tokens; leave buffer.
+        # Conservative chunk size that fits in any modern model's context.
         self.max_chars = 1_500_000  # ~375K tokens
-        self.chunk_overlap = max(0.0, min(0.5, chunk_overlap))  # Clamp to 0-50%
+        self.chunk_overlap = max(0.0, min(0.5, chunk_overlap))
 
-        logger.info(f"Gemini planner initialized with model: {model}")
+        logger.info(f"Planner initialized with model: {model}")
         logger.info(f"Chunk overlap: {self.chunk_overlap*100:.0f}%")
 
     def _chunk_content(self, content: str, max_chars: int) -> List[str]:
@@ -389,13 +388,12 @@ Provide ONLY the JSON output, nothing else.
 """
 
         try:
-            # Generate plan using Gemini
-            response = await self._client.aio.models.generate_content(
-                model=self._model_name,
-                contents=planning_prompt,
-                config=self._gen_config,
+            response_text = await self._llm.generate(
+                planning_prompt,
+                temperature=0.3,
+                max_tokens=8000,
             )
-            plan_text = (response.text or "").strip()
+            plan_text = (response_text or "").strip()
 
             # Extract JSON from response
             if "```json" in plan_text:
@@ -492,13 +490,13 @@ Keep summary to 3-5 paragraphs maximum.
 """
 
         try:
-            response = await self._client.aio.models.generate_content(
-                model=self._model_name,
-                contents=summary_prompt,
-                config=self._gen_config,
+            response_text = await self._llm.generate(
+                summary_prompt,
+                temperature=0.3,
+                max_tokens=2000,
             )
             logger.info(f"✓ Chunk {chunk_num} summarized")
-            return (response.text or "").strip()
+            return (response_text or "").strip()
         except Exception as e:
             logger.error(f"Error summarizing chunk {chunk_num}: {e}")
             return f"[Chunk {chunk_num}: Could not summarize due to error: {str(e)[:100]}]"

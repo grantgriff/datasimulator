@@ -36,16 +36,13 @@ sdk = DataSimulator(
     source=str(src),
     data_type="ranked",
     enable_planning=True,
-    # Generator does the heavy lifting (drafting N candidate responses at
-    # varied quality levels) — try Pro for it. Planner and verifier stay on
-    # Flash for cost and rate-limit headroom.
-    models={
-        "generator": "gemini-2.5-pro",
-        "verifier": "gemini-2.5-flash",
-        "planner": "gemini-2.5-flash",
-    },
+    # Defaults are now OpenAI everywhere:
+    #   generator: gpt-5.4-mini  (fast + capable)
+    #   verifier:  gpt-4.1-nano  (cheap scoring)
+    #   planner:   gpt-5.4       (strategic, one-shot)
+    # Override with `models={...}` if you want different ones.
     ranked_config={"num_responses": 3, "quality_spread": "wide"},
-    batch_size=2,           # Small batch keeps us under free-tier 5 RPM
+    batch_size=2,
     parallel_batches=1,
     max_cost=1.00,
     interactive=False,
