@@ -209,6 +209,22 @@ class OpenAIClient(BaseLLMClient):
 
         self.client = AsyncOpenAI(api_key=self.api_key)
 
+    @staticmethod
+    def _uses_new_params(model: str) -> bool:
+        """
+        OpenAI renamed `max_tokens` -> `max_completion_tokens` for the
+        GPT-5.x, GPT-4.1, and o-series families. Older models (gpt-4o,
+        gpt-4-turbo, gpt-3.5-turbo) still use `max_tokens`.
+        """
+        m = model.lower()
+        return (
+            m.startswith("gpt-5")
+            or m.startswith("gpt-4.1")
+            or m.startswith("o1")
+            or m.startswith("o3")
+            or m.startswith("o4")
+        )
+
     async def generate(
         self,
         prompt: str,
@@ -218,13 +234,24 @@ class OpenAIClient(BaseLLMClient):
     ) -> str:
         """Generate text using OpenAI."""
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-                **kwargs
-            )
+            call_kwargs = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                **kwargs,
+            }
+            if self._uses_new_params(self.model):
+                call_kwargs["max_completion_tokens"] = max_tokens
+                # GPT-5.x / o-series reject non-default temperature on many
+                # endpoints; pass it through only when the caller deviates
+                # from the default. Most of our callsites use the default,
+                # so this is rarely sent.
+                if temperature != 1.0:
+                    call_kwargs["temperature"] = temperature
+            else:
+                call_kwargs["max_tokens"] = max_tokens
+                call_kwargs["temperature"] = temperature
+
+            response = await self.client.chat.completions.create(**call_kwargs)
 
             # Track token usage
             self.last_input_tokens = response.usage.prompt_tokens
