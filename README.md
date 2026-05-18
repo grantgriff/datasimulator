@@ -200,9 +200,9 @@ All configurable variables in `examples/accounting_production_example.py`:
 | **source** | 39-42 | File paths, URLs, or list | `"examples/accounting_docs"` | **Source content**: folder path, web URLs, or mixed list |
 | **TARGET_SAMPLES** | 81 | Any integer | 1500 | Number of samples to generate |
 | **MAX_BUDGET** | 82 | Any float | 40.0 | Max cost in USD before stopping |
-| **data_type** | 100 | `"sft"`, `"dpo"`, `"verifiable_qa"` | `"sft"` | Training data format |
-| **generator** | 104 | See Model Selection | `"gemini-2.0-flash"` | Main generation model |
-| **verifier** | 105 | See Model Selection | `"gpt-4o-mini-2024-07-18"` | Quality scoring model |
+| **data_type** | 100 | `"sft"`, `"dpo"`, `"verifiable_qa"`, `"ranked"`, `"full"` | `"sft"` | Training data format |
+| **generator** | 104 | See Model Selection | `"gemini-2.5-flash"` | Main generation model |
+| **verifier** | 105 | See Model Selection | `"gemini-2.5-flash"` | Quality scoring model |
 | **quality_threshold** | 109 | 1.0 - 10.0 | 6.0 | Minimum quality score to accept |
 | **batch_size** | 110 | 5 - 50 | 20 | Samples per batch (20 recommended) |
 | **parallel_batches** | N/A | 1 - 10 | 4 | Concurrent batches (4 = 4x speedup) |
@@ -234,23 +234,21 @@ source = [
 
 **Generator Models (Line 104):**
 
-| Model | Cost | Speed | Quality | Recommendation |
+| Model | Cost ($/1M in / out) | Speed | Quality | Recommendation |
 |-------|------|-------|---------|----------------|
-| `gemini-2.0-flash` | $ | Very Fast | Very Good | **DEFAULT** - Best value (40x cheaper) |
+| `gemini-2.5-flash` | $0.30 / $2.50 | Very Fast | Very Good | **DEFAULT** — stable GA, single-provider |
+| `gemini-2.5-pro` | $1.25 / $10.00 | Medium | Excellent | Strategic / planning (used by the planner) |
+| `gemini-2.5-flash-lite` | $0.10 / $0.40 | Very Fast | Good | Cheapest tier |
 | `claude-sonnet-4-5-20250929` | $$$ | Slow | Excellent | Premium (complex responses) |
-| `claude-3-5-haiku-20241022` | $$ | Fast | Very Good | Fast alternative to Sonnet |
-| `gpt-4o-2024-08-06` | $$ | Medium | Very Good | OpenAI alternative |
-| `gpt-4o-mini-2024-07-18` | $ | Fast | Good | Budget option |
-
-**Cost Comparison (1500 samples):**
-- **Gemini 2.0 Flash:** ~$0.40 ✨ **DEFAULT** (40x cheaper than Sonnet!)
-- **GPT-4o-mini:** ~$2.50 (budget alternative)
-- **Haiku 3.5:** ~$4.00 (fast Claude)
-- **Sonnet 4.5:** ~$16.50 (premium quality)
+| `gpt-4o-mini-2024-07-18` | $0.15 / $0.60 | Fast | Good | OpenAI budget option |
 
 **Verifier Models (Line 105):**
 
-Recommendation: **Keep `gpt-4o-mini-2024-07-18`** - it's cheap ($0.150/M tokens) and accurate for quality scoring.
+Recommendation: **Keep `gemini-2.5-flash`** — same model family as the generator means a single `GOOGLE_API_KEY` is all you need, and Flash is cheap + accurate for 1-10 quality scoring.
+
+**Planner Model:**
+
+The optional Gemini planning layer (`enable_planning=True`) uses **`gemini-2.5-pro`** — it's strategic (one call per `generate()` to analyze whole documents and build the batch plan), so the higher cost is justified.
 
 ### Dataset Types
 

@@ -238,8 +238,13 @@ class OpenAIClient(BaseLLMClient):
 class GeminiClient(BaseLLMClient):
     """Google Gemini API client."""
 
-    # Pricing per 1M tokens (as of Jan 2025)
+    # Pricing per 1M tokens (paid tier; <=200k context for 2.5 pro)
+    # Refreshed May 2026 — gemini-2.0-* shuts down June 1, 2026.
     PRICING = {
+        "gemini-2.5-pro": {"input": 1.25, "output": 10.00},
+        "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
+        "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40},
+        # Legacy entries kept for callers still pinning these strings:
         "gemini-2.0-flash": {"input": 0.075, "output": 0.30},
         "gemini-2.0-flash-exp": {"input": 0.075, "output": 0.30},
         "gemini-1.5-pro": {"input": 1.25, "output": 5.00},
@@ -304,11 +309,11 @@ class GeminiClient(BaseLLMClient):
 
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         """Estimate cost based on token usage."""
-        # Extract base model name (e.g., "gemini-2.0-flash" from "gemini-2.0-flash-exp")
+        # Extract base model name (e.g., "gemini-2.5-flash" from "gemini-2.5-flash-exp")
         base_model = self.model.split("-exp")[0]
         pricing = self.PRICING.get(
             base_model,
-            {"input": 0.075, "output": 0.30}  # Default to Flash pricing
+            {"input": 0.30, "output": 2.50}  # Fallback to gemini-2.5-flash pricing
         )
 
         input_cost = (input_tokens / 1_000_000) * pricing["input"]
@@ -459,9 +464,9 @@ class ModelRouter:
 
     def __init__(
         self,
-        generator_model: str = "gemini-2.0-flash",
-        verifier_model: str = "gemini-2.0-flash",
-        diversity_model: str = "gemini-2.0-flash",
+        generator_model: str = "gemini-2.5-flash",
+        verifier_model: str = "gemini-2.5-flash",
+        diversity_model: str = "gemini-2.5-flash",
         **api_keys
     ):
         self.generator = UnifiedLLMClient(generator_model, **api_keys)

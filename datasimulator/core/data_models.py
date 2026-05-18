@@ -298,15 +298,15 @@ class Dataset(BaseModel):
 class ModelConfig(BaseModel):
     """Configuration for different model roles."""
     generator: str = Field(
-        default="gemini-2.0-flash",
+        default="gemini-2.5-flash",
         description="Model for main data generation"
     )
     verifier: str = Field(
-        default="gemini-2.0-flash",
+        default="gemini-2.5-flash",
         description="Model for quality verification"
     )
     diversity: str = Field(
-        default="gemini-2.0-flash",
+        default="gemini-2.5-flash",
         description="Model for diversity checks (can be local)"
     )
 

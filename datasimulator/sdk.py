@@ -292,9 +292,9 @@ class DataSimulator:
 
         # Setup models
         model_config = models or {}
-        generator_model = model_config.get("generator", "gemini-2.0-flash")
-        verifier_model = model_config.get("verifier", "gemini-2.0-flash")
-        diversity_model = model_config.get("diversity", "gemini-2.0-flash")
+        generator_model = model_config.get("generator", "gemini-2.5-flash")
+        verifier_model = model_config.get("verifier", "gemini-2.5-flash")
+        diversity_model = model_config.get("diversity", "gemini-2.5-flash")
 
         self.model_router = ModelRouter(
             generator_model=generator_model,
