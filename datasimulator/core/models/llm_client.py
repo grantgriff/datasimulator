@@ -460,8 +460,8 @@ class ModelRouter:
     def __init__(
         self,
         generator_model: str = "gemini-2.0-flash",
-        verifier_model: str = "gpt-4o-mini-2024-07-18",
-        diversity_model: str = "gpt-4o-mini-2024-07-18",
+        verifier_model: str = "gemini-2.0-flash",
+        diversity_model: str = "gemini-2.0-flash",
         **api_keys
     ):
         self.generator = UnifiedLLMClient(generator_model, **api_keys)

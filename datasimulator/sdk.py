@@ -210,10 +210,9 @@ class DataSimulator:
         sdk = DataSimulator(
             source="accounting_textbook.pdf",
             data_type="sft",
-            models={
-                "generator": "claude-sonnet-4-5-20250929",
-                "verifier": "gpt-4o-mini-2024-07-18",
-            }
+            # Defaults to Gemini Flash for generator/verifier/diversity, so
+            # only GOOGLE_API_KEY is required. Override `models` if you want
+            # to mix providers.
         )
 
         dataset = sdk.generate(num_samples=1000)
@@ -294,15 +293,16 @@ class DataSimulator:
         # Setup models
         model_config = models or {}
         generator_model = model_config.get("generator", "gemini-2.0-flash")
-        verifier_model = model_config.get("verifier", "gpt-4o-mini-2024-07-18")
-        diversity_model = model_config.get("diversity", "gpt-4o-mini-2024-07-18")
+        verifier_model = model_config.get("verifier", "gemini-2.0-flash")
+        diversity_model = model_config.get("diversity", "gemini-2.0-flash")
 
         self.model_router = ModelRouter(
             generator_model=generator_model,
             verifier_model=verifier_model,
             diversity_model=diversity_model,
             anthropic_api_key=anthropic_api_key,
-            openai_api_key=openai_api_key
+            openai_api_key=openai_api_key,
+            google_api_key=google_api_key,
         )
 
         # Setup cost tracking with interactive mode
