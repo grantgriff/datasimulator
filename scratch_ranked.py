@@ -58,4 +58,8 @@ ds.show_analytics()
 
 print("\n--- First record ---")
 with open("scratch_ranked.jsonl") as f:
-    print(json.dumps(json.loads(f.readline()), indent=2))
+    first_line = f.readline()
+if not first_line.strip():
+    print("(no records generated — see errors above)")
+else:
+    print(json.dumps(json.loads(first_line), indent=2))

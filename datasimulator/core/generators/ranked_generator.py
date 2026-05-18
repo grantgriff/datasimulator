@@ -375,3 +375,26 @@ Output (JSON array only):
         except Exception as e:
             logger.debug(f"RankedSample validation failed: {e}")
             return False
+
+    async def _score_quality_batch(self, samples: List[Dict[str, Any]]) -> List[float]:
+        """
+        For ranked records, each response was already scored individually by
+        the verifier inside `_generate_batch`. The sample-level quality is
+        just the rank-1 score (the best response we'd actually ship as a
+        gold answer / chosen response).
+
+        Overrides the base class's batch scoring, which serializes the whole
+        record and sends it to the verifier — but the nested ranked_responses
+        array confuses the verifier into scoring each inner response, so it
+        returns the wrong number of scores and every sample falls back to
+        the default 5.0 (which trips the quality threshold).
+        """
+        scores: List[float] = []
+        for s in samples:
+            try:
+                top = s["ranked_responses"][0]["quality_score"]
+                scores.append(max(1.0, min(10.0, float(top))))
+            except (KeyError, IndexError, TypeError, ValueError):
+                # Malformed record — give it a failing score so it gets rejected.
+                scores.append(1.0)
+        return scores
