@@ -101,8 +101,7 @@ def test_planner_emphasis_section_empty_when_no_emphasis():
 )
 def test_emphasis_biases_batch_allocation():
     """With topic_emphasis={'X': 0.5}, at least 40% of batches should be tagged with topic 'X'."""
-    # Use Flash so free-tier projects (which often have 0 quota on 2.5-pro) can run this.
-    planner = GeminiPlanner(model="gemini-2.5-flash")
+    planner = GeminiPlanner()
     source_content = (
         "This document covers two areas of accounting:\n\n"
         "Topic X: revenue recognition under ASC 606, including the 5-step model, "

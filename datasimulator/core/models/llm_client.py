@@ -254,11 +254,12 @@ class GeminiClient(BaseLLMClient):
     def __init__(self, model: str, api_key: Optional[str] = None):
         super().__init__(model)
         try:
-            import google.generativeai as genai
+            from google import genai
+            from google.genai import types as genai_types
         except ImportError:
             raise ImportError(
-                "google-generativeai package not installed. "
-                "Install with: pip install google-generativeai"
+                "google-genai package not installed. "
+                "Install with: pip install google-genai"
             )
 
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
@@ -268,8 +269,9 @@ class GeminiClient(BaseLLMClient):
                 "Set GOOGLE_API_KEY environment variable or pass google_api_key parameter."
             )
 
-        genai.configure(api_key=self.api_key)
-        self.client = genai.GenerativeModel(model)
+        self._client = genai.Client(api_key=self.api_key)
+        self._types = genai_types
+        self._model_name = model
 
     async def generate(
         self,
@@ -280,28 +282,25 @@ class GeminiClient(BaseLLMClient):
     ) -> str:
         """Generate text using Gemini."""
         try:
-            # Configure generation settings
-            generation_config = {
-                "temperature": temperature,
-                "max_output_tokens": max_tokens,
-            }
-
-            # Generate response
-            response = await self.client.generate_content_async(
-                prompt,
-                generation_config=generation_config
+            response = await self._client.aio.models.generate_content(
+                model=self._model_name,
+                contents=prompt,
+                config=self._types.GenerateContentConfig(
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                ),
             )
 
             # Track token usage
-            if hasattr(response, 'usage_metadata'):
-                self.last_input_tokens = response.usage_metadata.prompt_token_count
-                self.last_output_tokens = response.usage_metadata.candidates_token_count
+            usage = getattr(response, "usage_metadata", None)
+            if usage is not None:
+                self.last_input_tokens = getattr(usage, "prompt_token_count", 0) or 0
+                self.last_output_tokens = getattr(usage, "candidates_token_count", 0) or 0
             else:
-                # Estimate if usage not available
                 self.last_input_tokens = len(prompt) // 4
-                self.last_output_tokens = len(response.text) // 4
+                self.last_output_tokens = len(response.text or "") // 4
 
-            return response.text
+            return response.text or ""
 
         except Exception as e:
             logger.error(f"Gemini API error: {e}")

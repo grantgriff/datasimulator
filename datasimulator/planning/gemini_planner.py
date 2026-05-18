@@ -42,11 +42,11 @@ class GeminiPlanner:
         import os
 
         try:
-            import google.generativeai as genai
+            from google import genai
         except ImportError:
             raise ImportError(
-                "google-generativeai package not installed. "
-                "Install with: pip install google-generativeai"
+                "google-genai package not installed. "
+                "Install with: pip install google-genai"
             )
 
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
@@ -55,10 +55,10 @@ class GeminiPlanner:
                 "Google API key required. Set GOOGLE_API_KEY env variable or pass api_key"
             )
 
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(model)
+        self._client = genai.Client(api_key=self.api_key)
+        self._model_name = model
 
-        # Gemini 1.5 Pro has ~2M token context, but leave buffer
+        # Gemini 2.5 Pro context window is ~2M tokens; leave buffer.
         self.max_chars = 1_500_000  # ~375K tokens
         self.chunk_overlap = max(0.0, min(0.5, chunk_overlap))  # Clamp to 0-50%
 
@@ -379,8 +379,11 @@ Provide ONLY the JSON output, nothing else.
 
         try:
             # Generate plan using Gemini
-            response = self.model.generate_content(planning_prompt)
-            plan_text = response.text.strip()
+            response = await self._client.aio.models.generate_content(
+                model=self._model_name,
+                contents=planning_prompt,
+            )
+            plan_text = (response.text or "").strip()
 
             # Extract JSON from response
             if "```json" in plan_text:
@@ -477,15 +480,12 @@ Keep summary to 3-5 paragraphs maximum.
 """
 
         try:
-            # Note: Gemini SDK doesn't have native async, but we can use sync in executor
-            import asyncio
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.model.generate_content(summary_prompt)
+            response = await self._client.aio.models.generate_content(
+                model=self._model_name,
+                contents=summary_prompt,
             )
             logger.info(f"✓ Chunk {chunk_num} summarized")
-            return response.text.strip()
+            return (response.text or "").strip()
         except Exception as e:
             logger.error(f"Error summarizing chunk {chunk_num}: {e}")
             return f"[Chunk {chunk_num}: Could not summarize due to error: {str(e)[:100]}]"
