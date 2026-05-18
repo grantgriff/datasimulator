@@ -316,8 +316,9 @@ class DataSimulator:
         if enable_planning:
             try:
                 from .planning import GeminiPlanner
-                self.planner = GeminiPlanner(api_key=google_api_key)
-                logger.info("Gemini planning enabled")
+                planner_model = model_config.get("planner", "gemini-2.5-pro")
+                self.planner = GeminiPlanner(api_key=google_api_key, model=planner_model)
+                logger.info(f"Gemini planning enabled (model={planner_model})")
             except Exception as e:
                 logger.warning(f"Failed to initialize Gemini planner: {e}")
                 logger.warning("Continuing without planning layer")
