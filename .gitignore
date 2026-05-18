@@ -57,3 +57,8 @@ test_quick.py
 test_with_custom_paths.py
 test_my_docs.py
 scratch_ranked.jsonl
+
+# User-provided source materials and generated datasets
+data/*
+!data/README.md
+outputs/
