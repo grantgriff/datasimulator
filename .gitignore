@@ -56,3 +56,4 @@ cache/
 test_quick.py
 test_with_custom_paths.py
 test_my_docs.py
+scratch_ranked.jsonl
