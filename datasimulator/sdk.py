@@ -230,7 +230,7 @@ class DataSimulator:
         max_cost: float = 20.0,
         batch_size: int = 20,
         parallel_batches: int = 4,
-        interactive: bool = True,
+        interactive: bool = False,
         checkpoint_dir: Optional[str] = None,
         checkpoint_interval: int = 20,
         enable_planning: bool = False,
@@ -254,7 +254,9 @@ class DataSimulator:
             max_cost: Maximum cost before prompting user (USD)
             batch_size: Number of samples per API call
             parallel_batches: Number of batches to generate simultaneously (default: 4)
-            interactive: Whether to prompt user when cost limit is reached (False for autonomous)
+            interactive: Whether to prompt the user when the cost cap is hit
+                (default False — safe for programmatic / CLI integrations).
+                Set True for interactive Python sessions.
             checkpoint_dir: Directory to save checkpoints (optional)
             checkpoint_interval: Save checkpoint every N samples (default: 20)
             enable_planning: Use Gemini to analyze sources and create generation plan
@@ -380,24 +382,41 @@ class DataSimulator:
 
         return topic_emphasis
 
+    @staticmethod
+    def _looks_like_raw_text(s: str) -> bool:
+        """
+        Decide whether a `source` string is raw text content vs. a path/URL.
+
+        Heuristic: treat as raw text if it contains a newline OR is longer
+        than a sensible filename/URL. This lets callers (e.g. Posty's CLI)
+        pass already-loaded content directly without writing to a temp file.
+        """
+        if "\n" in s:
+            return True
+        # URLs and file paths are virtually never > 500 chars
+        if len(s) > 500:
+            return True
+        return False
+
     def _load_source(self) -> tuple[str, Dict[str, str]]:
         """
-        Load source content from file(s) or URL(s).
+        Load source content from file(s), URL(s), or raw text.
 
         Returns:
             Tuple of (combined_content, content_by_file)
             - combined_content: All sources combined into one string
-            - content_by_file: Dict mapping file path to its content
+            - content_by_file: Dict mapping file path / synthetic key to its content
 
         Supports:
-        - Single source: string path/URL
-        - Multiple sources: list of paths/URLs
+        - Single source: string path / URL / raw text
+        - Multiple sources: list of paths / URLs / raw text blobs
         - Plain text files (.txt, .md)
         - PDF files (.pdf)
         - Word documents (.docx)
         - Images (.jpg, .png, etc.) via OCR
         - Web pages (http://, https://)
         - Google Docs (URLs or IDs)
+        - Raw text strings (any string containing newlines or >500 chars)
         """
         if not self.source:
             return "", {}
@@ -412,6 +431,21 @@ class DataSimulator:
 
         for i, source in enumerate(sources, 1):
             try:
+                # Raw text path — caller passed already-loaded content
+                if self._looks_like_raw_text(source):
+                    content = source
+                    file_key = f"inline_text_{i}"
+                    logger.info(
+                        f"  [{i}/{len(sources)}] Inline text ({len(content)} chars)"
+                    )
+                    content_by_file[file_key] = content
+                    if len(sources) > 1:
+                        combined_content.append(f"\n\n=== Source {i}: {file_key} ===\n\n{content}")
+                    else:
+                        combined_content.append(content)
+                    successful_loads += 1
+                    continue
+
                 logger.info(f"  [{i}/{len(sources)}] Loading: {source}")
 
                 # Use unified document loader
