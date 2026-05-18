@@ -36,6 +36,14 @@ sdk = DataSimulator(
     source=str(src),
     data_type="ranked",
     enable_planning=True,
+    # Generator does the heavy lifting (drafting N candidate responses at
+    # varied quality levels) — try Pro for it. Planner and verifier stay on
+    # Flash for cost and rate-limit headroom.
+    models={
+        "generator": "gemini-2.5-pro",
+        "verifier": "gemini-2.5-flash",
+        "planner": "gemini-2.5-flash",
+    },
     ranked_config={"num_responses": 3, "quality_spread": "wide"},
     batch_size=2,           # Small batch keeps us under free-tier 5 RPM
     parallel_batches=1,
