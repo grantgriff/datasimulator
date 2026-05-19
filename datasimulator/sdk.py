@@ -238,6 +238,7 @@ class DataSimulator:
         google_api_key: Optional[str] = None,
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
+        progress_callback: Optional[Any] = None,
     ):
         """
         Initialize DataSimulator.
@@ -267,6 +268,12 @@ class DataSimulator:
             google_api_key: Google API key for Gemini planning (or use GOOGLE_API_KEY env)
             anthropic_api_key: Anthropic API key (or use ANTHROPIC_API_KEY env)
             openai_api_key: OpenAI API key (or use OPENAI_API_KEY env)
+            progress_callback: Optional callable invoked with a dict on each
+                lifecycle event (generation_started, batch_completed,
+                checkpoint_saved, cost_limit_reached, generation_completed).
+                Can be sync or async. Exceptions are logged and swallowed —
+                a buggy callback will not break generation. See INTEGRATION.md
+                for the event payload shape.
         """
         self.source = source
         self.data_type = data_type
@@ -275,6 +282,7 @@ class DataSimulator:
         self.quality_threshold = quality_threshold
         self.diversity_threshold = diversity_threshold
         self.ranked_config = ranked_config or {}
+        self.progress_callback = progress_callback
 
         # Store source files list for planner
         self.source_files = [source] if isinstance(source, str) else (source if source else [])
@@ -600,6 +608,11 @@ class DataSimulator:
                 f"Unknown data type: {self.data_type}. "
                 f"Supported types: sft, dpo, verifiable_qa, ranked, full"
             )
+
+        # Wire the progress callback through to the generator (all generators
+        # inherit it from BaseGenerator, so we set it directly rather than
+        # threading it through five constructors).
+        generator.progress_callback = self.progress_callback
 
         # Generate samples (using asyncio) with checkpointing and optional plan
         import asyncio

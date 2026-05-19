@@ -630,6 +630,33 @@ Version: 1.0.0
 - Phase 2: Document loading (Complete)
 - Phase 3: Quality & refinement (Complete)
 - Phase 4: All generators (Complete)
+- Phase 5: Programmatic integration surface (Complete) — headless-by-default,
+  raw-text sources, structured progress callbacks. See `INTEGRATION.md`.
+
+## Roadmap
+
+Tracking what's likely next. Order is rough — driven by what downstream
+tools (e.g. the Posty CLI) actually need.
+
+- **Resumable runs.** Today, checkpoints write JSONL but there's no
+  `resume_from=...` API — a killed process re-runs from scratch. Want to
+  add a way to point a new `DataSimulator` at a checkpoint dir and pick up
+  where it left off, with cost accounting carried over.
+- **Per-sample progress events.** `progress_callback` currently fires at
+  batch granularity. Per-sample events would unlock smoother progress UI
+  and live quality-score streams.
+- **Streaming output.** Yield `DatasetSample`s as they're produced rather
+  than materializing the full list at the end.
+- **First-class typed result schema export.** Emit a JSON Schema per
+  `data_type` so downstream consumers can validate records without
+  importing the SDK.
+- **Pluggable graders.** Let users supply a custom quality scorer (function
+  or model handle) instead of only the built-in LLM-as-judge.
+- **Rate-limit-aware backoff per provider.** Centralize retry/backoff so a
+  single 429 doesn't surface as a batch error.
+
+If you need any of these for your integration, open an issue — order can
+change based on demand.
 
 ## License
 

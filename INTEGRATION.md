@@ -65,6 +65,7 @@ that way for any CLI/server use.
 | `openai_api_key` | `str` | reads `OPENAI_API_KEY` | Override the env var. |
 | `anthropic_api_key` | `str` | reads `ANTHROPIC_API_KEY` | Only needed if you use Claude models. |
 | `google_api_key` | `str` | reads `GOOGLE_API_KEY` | Only needed if you use Gemini models. |
+| `progress_callback` | `Callable[[dict], None \| Awaitable[None]]` | `None` | Structured progress events for your UI. See "Progress callbacks" below. |
 
 ## Source formats
 
@@ -127,6 +128,49 @@ records = [s.data.model_dump() for s in dataset.samples]
 # `records` is a List[dict] matching the output shape table above
 ```
 
+## Progress callbacks
+
+Pass `progress_callback=fn` to receive structured events for your UI
+(Rich progress bars, status spinners, websocket pushes, etc.). The
+callback can be **sync or async**; exceptions raised inside it are logged
+and swallowed so a buggy callback can never break generation.
+
+```python
+def on_event(e: dict) -> None:
+    if e["event"] == "batch_completed":
+        progress_bar.update(e["samples_generated"], total=e["samples_target"])
+
+sdk = DataSimulator(..., progress_callback=on_event)
+```
+
+### Event reference
+
+Each event is a flat `dict` whose `"event"` key tells you the type.
+
+| `event` | Payload | When it fires |
+|---|---|---|
+| `generation_started` | `num_samples`, `data_type`, `quality_threshold`, `max_cost`, `num_planned_batches` (or `None`), `domain` (or `None`) | Once, at the very start. |
+| `batch_completed` | `samples_in_batch`, `samples_passed`, `batch_cost`, `average_quality`, `samples_generated`, `samples_target`, `total_cost` | After each batch finishes (post-validation, post-quality-check). This is the event to drive a progress bar from. |
+| `checkpoint_saved` | `samples_generated`, `checkpoint_dir` | After each checkpoint write (only if `checkpoint_dir` was set). |
+| `cost_limit_reached` | `total_cost`, `max_cost`, `samples_generated`, `samples_target` | When the cost cap halts the run early. |
+| `generation_completed` | `samples_generated`, `samples_target`, `failed`, `total_cost` | Once, at the very end (whether the run completed normally or stopped early). |
+
+### Minimal sketch with Rich
+
+```python
+from rich.progress import Progress
+
+with Progress() as progress:
+    task = progress.add_task("Generating...", total=500)
+
+    def on_event(e):
+        if e["event"] == "batch_completed":
+            progress.update(task, completed=e["samples_generated"])
+
+    sdk = DataSimulator(..., progress_callback=on_event)
+    sdk.generate(num_samples=500)
+```
+
 ## Error handling
 
 - API errors (auth, quota, network): the SDK logs them and falls back to
@@ -184,9 +228,10 @@ if __name__ == "__main__":
 
 ## What this SDK does NOT do (yet)
 
-- ❌ Streaming progress events. Progress goes to `print()` if
-  `show_progress=True`. If Posty needs structured progress for its UI, file
-  an issue and I'll add a callback hook.
 - ❌ Resumable generation across processes. Checkpoints write JSONL but
-  there's no `resume_from=...` API yet.
+  there's no `resume_from=...` API yet — if a run dies, you re-run from
+  scratch.
 - ❌ Streaming output. `dataset.samples` is materialized at the end.
+  Use `progress_callback` for live updates, not partial results.
+- ❌ Per-sample events. `progress_callback` fires at batch granularity,
+  not per record.

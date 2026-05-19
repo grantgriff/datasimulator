@@ -41,7 +41,8 @@ class BaseGenerator(ABC):
         source_content: Optional[str] = None,
         source_content_by_file: Optional[Dict[str, str]] = None,
         max_retries: int = 10,
-        quality_check_batch_size: int = 50
+        quality_check_batch_size: int = 50,
+        progress_callback: Optional[Any] = None
     ):
         """
         Initialize generator.
@@ -54,6 +55,9 @@ class BaseGenerator(ABC):
             source_content_by_file: Per-file source content mapping (filename -> content)
             max_retries: Maximum retry attempts for failed samples
             quality_check_batch_size: Number of samples to check per API call
+            progress_callback: Optional callable invoked with a dict for each
+                lifecycle event (see BaseGenerator._emit). Can be sync or async.
+                Exceptions are logged and swallowed.
         """
         self.model_router = model_router
         self.cost_tracker = cost_tracker
@@ -62,11 +66,31 @@ class BaseGenerator(ABC):
         self.source_content_by_file = source_content_by_file or {}
         self.max_retries = max_retries
         self.quality_check_batch_size = quality_check_batch_size
+        self.progress_callback = progress_callback
 
         self.generated_samples = []
         self.failed_samples = []
         self.total_regenerations = 0
         self.retry_count = 0
+
+    async def _emit(self, event: str, **payload) -> None:
+        """
+        Fire a progress event to the user-supplied callback, if any.
+
+        The callback receives a single dict: {"event": <name>, ...payload}.
+        Both sync and async callbacks are supported. Any exception raised
+        by the callback is logged and swallowed so it cannot break generation.
+        """
+        if not self.progress_callback:
+            return
+        payload["event"] = event
+        try:
+            import asyncio as _asyncio
+            result = self.progress_callback(payload)
+            if _asyncio.iscoroutine(result):
+                await result
+        except Exception as e:
+            logger.warning(f"progress_callback raised on event {event!r}: {e}")
 
     @property
     @abstractmethod
@@ -273,6 +297,20 @@ Output (JSON array only):
         samples_generated = 0
         samples_needed = num_samples
 
+        await self._emit(
+            "generation_started",
+            num_samples=num_samples,
+            data_type=self.data_type_name,
+            quality_threshold=self.config.quality_threshold,
+            max_cost=self.config.max_cost,
+            num_planned_batches=(
+                len(generation_plan["batches"])
+                if generation_plan and "batches" in generation_plan
+                else None
+            ),
+            domain=(generation_plan.get("domain") if generation_plan else None),
+        )
+
         if show_progress:
             print(f"\n🚀 Starting generation of {num_samples} {self.data_type_name.upper()} samples")
             print(f"📊 Quality threshold: {self.config.quality_threshold}/10")
@@ -298,6 +336,13 @@ Output (JSON array only):
         while samples_generated < num_samples:
             if not self.cost_tracker.can_continue():
                 logger.warning("Cost limit reached, stopping generation")
+                await self._emit(
+                    "cost_limit_reached",
+                    total_cost=self.cost_tracker.total_cost,
+                    max_cost=self.config.max_cost,
+                    samples_generated=samples_generated,
+                    samples_target=num_samples,
+                )
                 break
 
             # Calculate batch size
@@ -414,9 +459,29 @@ Output (JSON array only):
                         f"Cost: ${self.cost_tracker.total_cost:.2f}\n"
                     )
 
+                batch_avg_quality = (
+                    sum(all_quality_scores) / len(all_quality_scores)
+                    if all_quality_scores else 0.0
+                )
+                await self._emit(
+                    "batch_completed",
+                    samples_in_batch=len(raw_samples),
+                    samples_passed=len(batch_samples),
+                    batch_cost=last_cost,
+                    average_quality=batch_avg_quality,
+                    samples_generated=samples_generated,
+                    samples_target=num_samples,
+                    total_cost=self.cost_tracker.total_cost,
+                )
+
                 # Save checkpoint if needed
                 if checkpoint_dir and samples_generated % checkpoint_interval == 0:
                     self._save_checkpoint(checkpoint_dir, samples_generated, show_progress)
+                    await self._emit(
+                        "checkpoint_saved",
+                        samples_generated=samples_generated,
+                        checkpoint_dir=str(checkpoint_dir),
+                    )
 
                 # Handle failed samples (regenerate if needed)
                 failed_in_batch = batch_size - len(batch_samples)
@@ -453,6 +518,14 @@ Output (JSON array only):
             print(f"   Failed samples: {len(self.failed_samples)}")
             print(f"   Total cost: ${self.cost_tracker.total_cost:.2f}")
             print(f"{'='*60}\n")
+
+        await self._emit(
+            "generation_completed",
+            samples_generated=samples_generated,
+            samples_target=num_samples,
+            failed=len(self.failed_samples),
+            total_cost=self.cost_tracker.total_cost,
+        )
 
         return self.generated_samples[:num_samples]
 
@@ -725,6 +798,13 @@ Output (JSON array only):
 
             if not self.cost_tracker.can_continue():
                 logger.warning("Cost limit reached, stopping generation")
+                await self._emit(
+                    "cost_limit_reached",
+                    total_cost=self.cost_tracker.total_cost,
+                    max_cost=self.config.max_cost,
+                    samples_generated=samples_generated,
+                    samples_target=num_samples,
+                )
                 break
 
             # Process batches in this group in parallel
@@ -756,9 +836,29 @@ Output (JSON array only):
                     self.generated_samples.extend(result)
                     samples_generated += len(result)
 
+                    batch_avg_quality = (
+                        sum(s.metrics.quality_score for s in result) / len(result)
+                        if result else 0.0
+                    )
+                    await self._emit(
+                        "batch_completed",
+                        samples_in_batch=len(result),
+                        samples_passed=len(result),
+                        batch_cost=sum(s.metrics.generation_cost for s in result),
+                        average_quality=batch_avg_quality,
+                        samples_generated=samples_generated,
+                        samples_target=num_samples,
+                        total_cost=self.cost_tracker.total_cost,
+                    )
+
                     # Checkpointing
                     if checkpoint_dir and samples_generated % checkpoint_interval == 0:
                         self._save_checkpoint(checkpoint_dir, samples_generated, show_progress)
+                        await self._emit(
+                            "checkpoint_saved",
+                            samples_generated=samples_generated,
+                            checkpoint_dir=str(checkpoint_dir),
+                        )
 
             if show_progress and len(batch_group) > 1:
                 print(f"   ✓ Completed parallel group (total: {samples_generated}/{num_samples})")
@@ -774,6 +874,14 @@ Output (JSON array only):
             print(f"   Failed samples: {len(self.failed_samples)}")
             print(f"   Total cost: ${self.cost_tracker.total_cost:.2f}")
             print(f"{'='*60}\n")
+
+        await self._emit(
+            "generation_completed",
+            samples_generated=samples_generated,
+            samples_target=num_samples,
+            failed=len(self.failed_samples),
+            total_cost=self.cost_tracker.total_cost,
+        )
 
         return self.generated_samples[:num_samples]
 
