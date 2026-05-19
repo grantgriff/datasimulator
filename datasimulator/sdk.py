@@ -228,7 +228,7 @@ class DataSimulator:
         quality_threshold: float = 6.0,
         diversity_threshold: float = 0.85,
         max_cost: float = 20.0,
-        batch_size: int = 20,
+        batch_size: int = 10,
         parallel_batches: int = 4,
         interactive: bool = False,
         checkpoint_dir: Optional[str] = None,
@@ -253,7 +253,12 @@ class DataSimulator:
             quality_threshold: Minimum quality score (1-10)
             diversity_threshold: Maximum similarity for diversity (0-1)
             max_cost: Maximum cost before prompting user (USD)
-            batch_size: Number of samples per API call
+            batch_size: Number of samples per API call (default 10).
+                Each batch is one LLM call returning a JSON array of N
+                records. Higher = fewer round trips but risks hitting
+                model output ceilings (most models cap actual output
+                around 16K tokens). For dense content (1KB+ per record),
+                stay at 10 or below. See CLAUDE.md.
             parallel_batches: Number of batches to generate simultaneously (default: 4)
             interactive: Whether to prompt the user when the cost cap is hit
                 (default False — safe for programmatic / CLI integrations).
