@@ -44,12 +44,13 @@ CHECKPOINT_INTERVAL = 100             # save a checkpoint every N samples (ignor
 NUM_RESPONSES = 3                     # how many candidates per prompt
 QUALITY_SPREAD = "wide"               # "wide" (gap >5.0) or "narrow" (gap <2.5)
 
-# Bias the planner toward specific topics. Set to {} to let the planner choose.
-# Weights must sum to <= 1.0. Remainder goes to topics the planner extracts.
-TOPIC_EMPHASIS = {
-    # "ASC 606 revenue recognition": 0.4,
-    # "deferred tax assets": 0.3,
-}
+# Bias the planner toward specific topics. Default is {} — the planner has
+# full discretion to extract topics from your source material.
+#
+# To override, set weights summing to <= 1.0:
+#     TOPIC_EMPHASIS = {"ASC 606 revenue recognition": 0.4, "deferred tax": 0.3}
+# Remainder is distributed across topics the planner extracts naturally.
+TOPIC_EMPHASIS: dict[str, float] = {}
 
 # Models — defaults work; override here to mix providers.
 MODELS = {
