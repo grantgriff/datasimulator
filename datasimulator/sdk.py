@@ -20,6 +20,8 @@ from .core.models.llm_client import ModelRouter
 from .core.generators.sft_generator import SFTGenerator
 from .core.generators.dpo_generator import DPOGenerator
 from .core.generators.verifiable_qa_generator import VerifiableQAGenerator
+from .core.generators.ranked_generator import RankedGenerator
+from .core.generators.full_generator import FullGenerator
 from .utils.cost_tracker import CostTracker
 from .sources.document_loader import DocumentLoader, load_document
 from .sources.base_loader import LoaderException
@@ -208,10 +210,9 @@ class DataSimulator:
         sdk = DataSimulator(
             source="accounting_textbook.pdf",
             data_type="sft",
-            models={
-                "generator": "claude-sonnet-4-5-20250929",
-                "verifier": "gpt-4o-mini-2024-07-18",
-            }
+            # Defaults to Gemini Flash for generator/verifier/diversity, so
+            # only GOOGLE_API_KEY is required. Override `models` if you want
+            # to mix providers.
         )
 
         dataset = sdk.generate(num_samples=1000)
@@ -222,20 +223,22 @@ class DataSimulator:
     def __init__(
         self,
         source: Optional[Union[str, List[str]]] = None,
-        data_type: Literal["sft", "dpo", "verifiable_qa"] = "sft",
+        data_type: Literal["sft", "dpo", "verifiable_qa", "ranked", "full"] = "sft",
         models: Optional[Dict[str, str]] = None,
         quality_threshold: float = 6.0,
         diversity_threshold: float = 0.85,
         max_cost: float = 20.0,
         batch_size: int = 20,
         parallel_batches: int = 4,
-        interactive: bool = True,
+        interactive: bool = False,
         checkpoint_dir: Optional[str] = None,
         checkpoint_interval: int = 20,
         enable_planning: bool = False,
+        ranked_config: Optional[Dict[str, Any]] = None,
         google_api_key: Optional[str] = None,
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
+        progress_callback: Optional[Any] = None,
     ):
         """
         Initialize DataSimulator.
@@ -252,13 +255,25 @@ class DataSimulator:
             max_cost: Maximum cost before prompting user (USD)
             batch_size: Number of samples per API call
             parallel_batches: Number of batches to generate simultaneously (default: 4)
-            interactive: Whether to prompt user when cost limit is reached (False for autonomous)
+            interactive: Whether to prompt the user when the cost cap is hit
+                (default False — safe for programmatic / CLI integrations).
+                Set True for interactive Python sessions.
             checkpoint_dir: Directory to save checkpoints (optional)
             checkpoint_interval: Save checkpoint every N samples (default: 20)
             enable_planning: Use Gemini to analyze sources and create generation plan
+            ranked_config: Configuration for data_type="ranked" and "full":
+                - num_responses (int, default 4): responses per prompt
+                - quality_spread ("wide"|"narrow", default "wide"): target gap
+                  between best/worst response scores
             google_api_key: Google API key for Gemini planning (or use GOOGLE_API_KEY env)
             anthropic_api_key: Anthropic API key (or use ANTHROPIC_API_KEY env)
             openai_api_key: OpenAI API key (or use OPENAI_API_KEY env)
+            progress_callback: Optional callable invoked with a dict on each
+                lifecycle event (generation_started, batch_completed,
+                checkpoint_saved, cost_limit_reached, generation_completed).
+                Can be sync or async. Exceptions are logged and swallowed —
+                a buggy callback will not break generation. See INTEGRATION.md
+                for the event payload shape.
         """
         self.source = source
         self.data_type = data_type
@@ -266,6 +281,8 @@ class DataSimulator:
         self.parallel_batches = parallel_batches
         self.quality_threshold = quality_threshold
         self.diversity_threshold = diversity_threshold
+        self.ranked_config = ranked_config or {}
+        self.progress_callback = progress_callback
 
         # Store source files list for planner
         self.source_files = [source] if isinstance(source, str) else (source if source else [])
@@ -285,16 +302,17 @@ class DataSimulator:
 
         # Setup models
         model_config = models or {}
-        generator_model = model_config.get("generator", "gemini-2.0-flash")
-        verifier_model = model_config.get("verifier", "gpt-4o-mini-2024-07-18")
-        diversity_model = model_config.get("diversity", "gpt-4o-mini-2024-07-18")
+        generator_model = model_config.get("generator", "gpt-5.4-mini")
+        verifier_model = model_config.get("verifier", "gpt-4.1-nano")
+        diversity_model = model_config.get("diversity", "gpt-4.1-nano")
 
         self.model_router = ModelRouter(
             generator_model=generator_model,
             verifier_model=verifier_model,
             diversity_model=diversity_model,
             anthropic_api_key=anthropic_api_key,
-            openai_api_key=openai_api_key
+            openai_api_key=openai_api_key,
+            google_api_key=google_api_key,
         )
 
         # Setup cost tracking with interactive mode
@@ -308,8 +326,14 @@ class DataSimulator:
         if enable_planning:
             try:
                 from .planning import GeminiPlanner
-                self.planner = GeminiPlanner(api_key=google_api_key)
-                logger.info("Gemini planning enabled")
+                planner_model = model_config.get("planner", "gpt-5.4")
+                self.planner = GeminiPlanner(
+                    model=planner_model,
+                    anthropic_api_key=anthropic_api_key,
+                    openai_api_key=openai_api_key,
+                    google_api_key=google_api_key,
+                )
+                logger.info(f"Gemini planning enabled (model={planner_model})")
             except Exception as e:
                 logger.warning(f"Failed to initialize Gemini planner: {e}")
                 logger.warning("Continuing without planning layer")
@@ -324,24 +348,83 @@ class DataSimulator:
         logger.info(f"Generator: {generator_model}")
         logger.info(f"Verifier: {verifier_model}")
 
+    def _validate_topic_emphasis(
+        self,
+        topic_emphasis: Optional[Dict[str, float]]
+    ) -> Optional[Dict[str, float]]:
+        """
+        Validate and normalize topic_emphasis input.
+
+        Rejects bad shapes; warns when planning is disabled (in which case
+        the emphasis cannot be applied and is dropped).
+        """
+        if topic_emphasis is None:
+            return None
+
+        if not isinstance(topic_emphasis, dict) or not topic_emphasis:
+            raise ValueError(
+                "topic_emphasis must be a non-empty dict of {topic: weight}"
+            )
+
+        for topic, weight in topic_emphasis.items():
+            if not isinstance(topic, str) or not topic.strip():
+                raise ValueError(f"topic_emphasis keys must be non-empty strings (got {topic!r})")
+            if not isinstance(weight, (int, float)) or weight <= 0 or weight > 1:
+                raise ValueError(
+                    f"topic_emphasis weight for {topic!r} must be in (0, 1], got {weight}"
+                )
+
+        total = sum(topic_emphasis.values())
+        # Allow tiny floating-point slack above 1.0
+        if total > 1.0 + 1e-6:
+            raise ValueError(
+                f"topic_emphasis weights must sum to <= 1.0, got {total:.4f}"
+            )
+
+        if not self.enable_planning:
+            logger.warning(
+                "topic_emphasis was provided but enable_planning=False; "
+                "emphasis will be ignored. Pass enable_planning=True to apply."
+            )
+            return None
+
+        return topic_emphasis
+
+    @staticmethod
+    def _looks_like_raw_text(s: str) -> bool:
+        """
+        Decide whether a `source` string is raw text content vs. a path/URL.
+
+        Heuristic: treat as raw text if it contains a newline OR is longer
+        than a sensible filename/URL. This lets callers (e.g. Posty's CLI)
+        pass already-loaded content directly without writing to a temp file.
+        """
+        if "\n" in s:
+            return True
+        # URLs and file paths are virtually never > 500 chars
+        if len(s) > 500:
+            return True
+        return False
+
     def _load_source(self) -> tuple[str, Dict[str, str]]:
         """
-        Load source content from file(s) or URL(s).
+        Load source content from file(s), URL(s), or raw text.
 
         Returns:
             Tuple of (combined_content, content_by_file)
             - combined_content: All sources combined into one string
-            - content_by_file: Dict mapping file path to its content
+            - content_by_file: Dict mapping file path / synthetic key to its content
 
         Supports:
-        - Single source: string path/URL
-        - Multiple sources: list of paths/URLs
+        - Single source: string path / URL / raw text
+        - Multiple sources: list of paths / URLs / raw text blobs
         - Plain text files (.txt, .md)
         - PDF files (.pdf)
         - Word documents (.docx)
         - Images (.jpg, .png, etc.) via OCR
         - Web pages (http://, https://)
         - Google Docs (URLs or IDs)
+        - Raw text strings (any string containing newlines or >500 chars)
         """
         if not self.source:
             return "", {}
@@ -356,6 +439,21 @@ class DataSimulator:
 
         for i, source in enumerate(sources, 1):
             try:
+                # Raw text path — caller passed already-loaded content
+                if self._looks_like_raw_text(source):
+                    content = source
+                    file_key = f"inline_text_{i}"
+                    logger.info(
+                        f"  [{i}/{len(sources)}] Inline text ({len(content)} chars)"
+                    )
+                    content_by_file[file_key] = content
+                    if len(sources) > 1:
+                        combined_content.append(f"\n\n=== Source {i}: {file_key} ===\n\n{content}")
+                    else:
+                        combined_content.append(content)
+                    successful_loads += 1
+                    continue
+
                 logger.info(f"  [{i}/{len(sources)}] Loading: {source}")
 
                 # Use unified document loader
@@ -403,7 +501,8 @@ class DataSimulator:
         num_samples: int,
         domain_context: Optional[str] = None,
         enable_human_review: bool = False,
-        show_progress: bool = True
+        show_progress: bool = True,
+        topic_emphasis: Optional[Dict[str, float]] = None
     ) -> GeneratedDataset:
         """
         Generate training dataset.
@@ -413,10 +512,19 @@ class DataSimulator:
             domain_context: Optional domain-specific context
             enable_human_review: Enable manual review of samples
             show_progress: Show generation progress
+            topic_emphasis: Optional dict mapping topic strings to weights (0-1).
+                When provided alongside enable_planning=True, biases the Gemini
+                planner toward allocating more batches to the weighted topics.
+                Values must sum to <= 1.0 (remainder distributed across other
+                topics naturally extracted from sources). Ignored with a warning
+                when enable_planning=False.
 
         Returns:
             GeneratedDataset object with samples and analytics
         """
+        # Validate topic_emphasis
+        topic_emphasis = self._validate_topic_emphasis(topic_emphasis)
+
         # Create generation plan if planning is enabled
         generation_plan = None
         if self.enable_planning and self.planner and self.source_content:
@@ -428,7 +536,8 @@ class DataSimulator:
                     total_samples=num_samples,
                     data_type=self.data_type,
                     source_files=self.source_files,
-                    batch_size=self.batch_size
+                    batch_size=self.batch_size,
+                    topic_emphasis=topic_emphasis
                 )
             )
             logger.info(f"✓ Plan created: {generation_plan.get('num_batches', 0)} batches")
@@ -474,11 +583,36 @@ class DataSimulator:
                 source_content=self.source_content,
                 source_content_by_file=self.source_content_by_file
             )
+        elif self.data_type == "ranked":
+            generator = RankedGenerator(
+                num_responses=self.ranked_config.get("num_responses", 4),
+                quality_spread=self.ranked_config.get("quality_spread", "wide"),
+                model_router=self.model_router,
+                cost_tracker=self.cost_tracker,
+                config=config,
+                source_content=self.source_content,
+                source_content_by_file=self.source_content_by_file
+            )
+        elif self.data_type == "full":
+            generator = FullGenerator(
+                num_responses=self.ranked_config.get("num_responses", 4),
+                quality_spread=self.ranked_config.get("quality_spread", "wide"),
+                model_router=self.model_router,
+                cost_tracker=self.cost_tracker,
+                config=config,
+                source_content=self.source_content,
+                source_content_by_file=self.source_content_by_file
+            )
         else:
             raise ValueError(
                 f"Unknown data type: {self.data_type}. "
-                f"Supported types: sft, dpo, verifiable_qa"
+                f"Supported types: sft, dpo, verifiable_qa, ranked, full"
             )
+
+        # Wire the progress callback through to the generator (all generators
+        # inherit it from BaseGenerator, so we set it directly rather than
+        # threading it through five constructors).
+        generator.progress_callback = self.progress_callback
 
         # Generate samples (using asyncio) with checkpointing and optional plan
         import asyncio

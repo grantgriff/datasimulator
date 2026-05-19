@@ -101,8 +101,8 @@ def main():
 
         # Model configuration
         models={
-            "generator": "gemini-2.0-flash",  # Main generator (40x cheaper than Sonnet!)
-            "verifier": "gpt-4o-mini-2024-07-18",       # Quality scoring
+            "generator": "gemini-2.5-flash",  # Main generator (stable GA, cheap + fast)
+            "verifier": "gemini-2.5-flash",   # Same family => one GOOGLE_API_KEY
         },
 
         # Quality settings

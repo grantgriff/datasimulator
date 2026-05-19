@@ -28,41 +28,51 @@ class GeminiPlanner:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-2.5-pro",
-        chunk_overlap: float = 0.1
+        model: str = "gpt-5.4",
+        chunk_overlap: float = 0.1,
+        anthropic_api_key: Optional[str] = None,
+        openai_api_key: Optional[str] = None,
+        google_api_key: Optional[str] = None,
     ):
         """
-        Initialize Gemini planner.
+        Initialize the LLM-backed planner.
+
+        Provider is detected from the model name prefix:
+            gpt-*    → OpenAI
+            claude-* → Anthropic
+            gemini-* → Google
 
         Args:
-            api_key: Google API key (or uses GOOGLE_API_KEY env var)
-            model: Gemini model to use (pro for 1M+ token context)
-            chunk_overlap: Fraction of chunk to overlap with next (0.0-0.5, default 0.1 = 10%)
+            api_key: Convenience param — auto-routes to the matching provider
+                key slot based on the model prefix. Pass `openai_api_key=` etc.
+                explicitly if you need finer control.
+            model: Model name (default: gpt-5.4).
+            chunk_overlap: Fraction of chunk to overlap with next (0.0-0.5).
         """
-        import os
+        from ..core.models.llm_client import UnifiedLLMClient
 
-        try:
-            import google.generativeai as genai
-        except ImportError:
-            raise ImportError(
-                "google-generativeai package not installed. "
-                "Install with: pip install google-generativeai"
-            )
+        # Route the convenience `api_key` to the correct provider slot
+        keys = {
+            "anthropic_api_key": anthropic_api_key,
+            "openai_api_key": openai_api_key,
+            "google_api_key": google_api_key,
+        }
+        if api_key and not any(keys.values()):
+            if model.startswith("claude"):
+                keys["anthropic_api_key"] = api_key
+            elif model.startswith("gemini"):
+                keys["google_api_key"] = api_key
+            else:  # gpt-* and default
+                keys["openai_api_key"] = api_key
 
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
-        if not self.api_key:
-            raise ValueError(
-                "Google API key required. Set GOOGLE_API_KEY env variable or pass api_key"
-            )
+        self._llm = UnifiedLLMClient(model, **keys)
+        self._model_name = model
 
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(model)
-
-        # Gemini 1.5 Pro has ~2M token context, but leave buffer
+        # Conservative chunk size that fits in any modern model's context.
         self.max_chars = 1_500_000  # ~375K tokens
-        self.chunk_overlap = max(0.0, min(0.5, chunk_overlap))  # Clamp to 0-50%
+        self.chunk_overlap = max(0.0, min(0.5, chunk_overlap))
 
-        logger.info(f"Gemini planner initialized with model: {model}")
+        logger.info(f"Planner initialized with model: {model}")
         logger.info(f"Chunk overlap: {self.chunk_overlap*100:.0f}%")
 
     def _chunk_content(self, content: str, max_chars: int) -> List[str]:
@@ -211,7 +221,8 @@ class GeminiPlanner:
         total_samples: int,
         data_type: str = "sft",
         source_files: Optional[List[str]] = None,
-        batch_size: int = 20
+        batch_size: int = 20,
+        topic_emphasis: Optional[Dict[str, float]] = None
     ) -> Dict[str, Any]:
         """
         Analyze sources and create batch-level generation plan.
@@ -222,6 +233,10 @@ class GeminiPlanner:
             data_type: Type of training data (sft, dpo, etc.)
             source_files: List of source file names (optional)
             batch_size: Number of samples per batch (default: 20)
+            topic_emphasis: Optional dict mapping topic strings to weights (0-1).
+                When provided, the planner is instructed to bias batch allocation
+                toward these topics. Weights are interpreted as the target
+                fraction of total samples for each topic.
 
         Returns:
             Dictionary with:
@@ -237,13 +252,65 @@ class GeminiPlanner:
         logger.info(f"Plan will have {num_batches} batches of {batch_size} samples each")
         logger.info(f"Analyzing {len(source_content):,} characters of source content")
 
+        if topic_emphasis:
+            emphasis_summary = ", ".join(f"{t}={w:.0%}" for t, w in topic_emphasis.items())
+            logger.info(f"Applying topic emphasis: {emphasis_summary}")
+
         # Handle large documents with chunking
         if len(source_content) > self.max_chars:
             logger.warning(f"Content exceeds {self.max_chars:,} chars, using chunked analysis")
-            return await self._create_plan_chunked(source_content, total_samples, data_type, source_files, batch_size)
+            return await self._create_plan_chunked(
+                source_content, total_samples, data_type, source_files, batch_size, topic_emphasis
+            )
 
         # Single-pass planning for smaller documents
-        return await self._create_plan_single(source_content, total_samples, data_type, source_files, batch_size)
+        return await self._create_plan_single(
+            source_content, total_samples, data_type, source_files, batch_size, topic_emphasis
+        )
+
+    def _build_emphasis_section(
+        self,
+        topic_emphasis: Optional[Dict[str, float]],
+        num_batches: int
+    ) -> str:
+        """
+        Build the planning-prompt section that instructs Gemini to bias
+        batch allocation toward weighted topics.
+        """
+        if not topic_emphasis:
+            return ""
+
+        lines = []
+        explicit_weight = 0.0
+        for topic, weight in topic_emphasis.items():
+            batches_for_topic = max(1, round(weight * num_batches))
+            lines.append(
+                f"  - \"{topic}\": target {weight:.0%} of samples "
+                f"(~{batches_for_topic} of {num_batches} batches)"
+            )
+            explicit_weight += weight
+
+        remainder = max(0.0, 1.0 - explicit_weight)
+        remainder_clause = (
+            f"The remaining {remainder:.0%} of batches should cover OTHER topics naturally extracted from the source material."
+            if remainder > 0.01
+            else "Allocate ALL batches across the weighted topics above; do not introduce other major topics."
+        )
+
+        return f"""
+
+=== TOPIC EMPHASIS (USER-SPECIFIED ALLOCATION) ===
+
+The user has explicitly requested that the following topics receive WEIGHTED ALLOCATION in the batch plan:
+{chr(10).join(lines)}
+
+{remainder_clause}
+
+REQUIREMENTS:
+- For each weighted topic above, the "topic" field in batches dedicated to that topic MUST contain the EXACT topic string (case-sensitive substring match is OK).
+- If a weighted topic is not clearly covered in the source material, still allocate batches to it but note this in the guidance field (e.g., "limited source coverage — extrapolate carefully").
+- Do not exceed the requested weight by more than 20% for any single topic.
+"""
 
     async def _create_plan_single(
         self,
@@ -251,12 +318,14 @@ class GeminiPlanner:
         total_samples: int,
         data_type: str,
         source_files: Optional[List[str]] = None,
-        batch_size: int = 20
+        batch_size: int = 20,
+        topic_emphasis: Optional[Dict[str, float]] = None
     ) -> Dict[str, Any]:
         """Create batch-level plan with single Gemini API call."""
 
         file_list = "\n".join([f"  - {f}" for f in source_files]) if source_files else "Multiple source files"
         num_batches = (total_samples + batch_size - 1) // batch_size  # Ceiling division
+        emphasis_section = self._build_emphasis_section(topic_emphasis, num_batches)
 
         planning_prompt = f"""
 You are an expert at analyzing technical documents and creating detailed training data generation plans.
@@ -268,7 +337,7 @@ SOURCE FILES:
 
 SOURCE CONTENT:
 {source_content[:self.max_chars]}
-
+{emphasis_section}
 REQUIREMENTS:
 1. Provide a brief review of the source files (1-2 paragraphs)
 2. Create EXACTLY {num_batches} batches (each batch generates {batch_size} samples)
@@ -318,10 +387,20 @@ CRITICAL: You must provide EXACTLY {num_batches} batch entries. The last batch s
 Provide ONLY the JSON output, nothing else.
 """
 
+        # The plan JSON includes ~400-600 chars per batch (topic, subtopic,
+        # guidance, focus_areas, files). At 500 batches (= 10K samples at
+        # batch_size=20) that's ~250K chars ≈ ~62K tokens. 128K leaves
+        # plenty of headroom for everything we'd reasonably generate. The
+        # LLM client auto-streams above 10K to avoid request issues.
+        # For runs beyond ~500 batches the right fix is chunking the
+        # planner output across multiple calls, not raising this further.
         try:
-            # Generate plan using Gemini
-            response = self.model.generate_content(planning_prompt)
-            plan_text = response.text.strip()
+            response_text = await self._llm.generate(
+                planning_prompt,
+                temperature=0.3,
+                max_tokens=128000,
+            )
+            plan_text = (response_text or "").strip()
 
             # Extract JSON from response
             if "```json" in plan_text:
@@ -356,7 +435,8 @@ Provide ONLY the JSON output, nothing else.
         total_samples: int,
         data_type: str,
         source_files: Optional[List[str]] = None,
-        batch_size: int = 20
+        batch_size: int = 20,
+        topic_emphasis: Optional[Dict[str, float]] = None
     ) -> Dict[str, Any]:
         """
         Create batch-level plan for large documents using chunked analysis.
@@ -384,7 +464,9 @@ Provide ONLY the JSON output, nothing else.
         logger.info(f"✓ All chunks summarized. Combined: {len(combined_summary):,} characters")
 
         # Now create batch plan from summaries
-        return await self._create_plan_single(combined_summary, total_samples, data_type, source_files, batch_size)
+        return await self._create_plan_single(
+            combined_summary, total_samples, data_type, source_files, batch_size, topic_emphasis
+        )
 
     async def _summarize_chunk(self, chunk: str, chunk_num: int, total_chunks: int) -> str:
         """
@@ -415,15 +497,13 @@ Keep summary to 3-5 paragraphs maximum.
 """
 
         try:
-            # Note: Gemini SDK doesn't have native async, but we can use sync in executor
-            import asyncio
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.model.generate_content(summary_prompt)
+            response_text = await self._llm.generate(
+                summary_prompt,
+                temperature=0.3,
+                max_tokens=2000,
             )
             logger.info(f"✓ Chunk {chunk_num} summarized")
-            return response.text.strip()
+            return (response_text or "").strip()
         except Exception as e:
             logger.error(f"Error summarizing chunk {chunk_num}: {e}")
             return f"[Chunk {chunk_num}: Could not summarize due to error: {str(e)[:100]}]"

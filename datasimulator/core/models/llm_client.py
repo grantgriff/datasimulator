@@ -168,8 +168,22 @@ class ClaudeClient(BaseLLMClient):
 class OpenAIClient(BaseLLMClient):
     """OpenAI API client."""
 
-    # Pricing per 1M tokens (as of Jan 2025)
+    # Pricing per 1M tokens (refreshed May 2026)
     PRICING = {
+        # GPT-5.5 family
+        "gpt-5.5": {"input": 5.00, "output": 30.00},
+        "gpt-5.5-pro": {"input": 30.00, "output": 180.00},
+        # GPT-5.4 family
+        "gpt-5.4": {"input": 2.50, "output": 15.00},
+        "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
+        "gpt-5.4-nano": {"input": 0.20, "output": 1.25},
+        # GPT-4.1 family
+        "gpt-4.1": {"input": 2.00, "output": 8.00},
+        "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
+        "gpt-4.1-nano": {"input": 0.10, "output": 0.40},
+        # Reasoning models
+        "o4-mini": {"input": 0.55, "output": 2.20},
+        # Legacy entries kept for callers still pinning these strings
         "gpt-4o": {"input": 2.50, "output": 10.00},
         "gpt-4o-mini": {"input": 0.150, "output": 0.600},
         "gpt-4-turbo": {"input": 10.00, "output": 30.00},
@@ -195,6 +209,22 @@ class OpenAIClient(BaseLLMClient):
 
         self.client = AsyncOpenAI(api_key=self.api_key)
 
+    @staticmethod
+    def _uses_new_params(model: str) -> bool:
+        """
+        OpenAI renamed `max_tokens` -> `max_completion_tokens` for the
+        GPT-5.x, GPT-4.1, and o-series families. Older models (gpt-4o,
+        gpt-4-turbo, gpt-3.5-turbo) still use `max_tokens`.
+        """
+        m = model.lower()
+        return (
+            m.startswith("gpt-5")
+            or m.startswith("gpt-4.1")
+            or m.startswith("o1")
+            or m.startswith("o3")
+            or m.startswith("o4")
+        )
+
     async def generate(
         self,
         prompt: str,
@@ -204,13 +234,24 @@ class OpenAIClient(BaseLLMClient):
     ) -> str:
         """Generate text using OpenAI."""
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-                **kwargs
-            )
+            call_kwargs = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                **kwargs,
+            }
+            if self._uses_new_params(self.model):
+                call_kwargs["max_completion_tokens"] = max_tokens
+                # GPT-5.x / o-series reject non-default temperature on many
+                # endpoints; pass it through only when the caller deviates
+                # from the default. Most of our callsites use the default,
+                # so this is rarely sent.
+                if temperature != 1.0:
+                    call_kwargs["temperature"] = temperature
+            else:
+                call_kwargs["max_tokens"] = max_tokens
+                call_kwargs["temperature"] = temperature
+
+            response = await self.client.chat.completions.create(**call_kwargs)
 
             # Track token usage
             self.last_input_tokens = response.usage.prompt_tokens
@@ -238,8 +279,13 @@ class OpenAIClient(BaseLLMClient):
 class GeminiClient(BaseLLMClient):
     """Google Gemini API client."""
 
-    # Pricing per 1M tokens (as of Jan 2025)
+    # Pricing per 1M tokens (paid tier; <=200k context for 2.5 pro)
+    # Refreshed May 2026 — gemini-2.0-* shuts down June 1, 2026.
     PRICING = {
+        "gemini-2.5-pro": {"input": 1.25, "output": 10.00},
+        "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
+        "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40},
+        # Legacy entries kept for callers still pinning these strings:
         "gemini-2.0-flash": {"input": 0.075, "output": 0.30},
         "gemini-2.0-flash-exp": {"input": 0.075, "output": 0.30},
         "gemini-1.5-pro": {"input": 1.25, "output": 5.00},
@@ -249,11 +295,12 @@ class GeminiClient(BaseLLMClient):
     def __init__(self, model: str, api_key: Optional[str] = None):
         super().__init__(model)
         try:
-            import google.generativeai as genai
+            from google import genai
+            from google.genai import types as genai_types
         except ImportError:
             raise ImportError(
-                "google-generativeai package not installed. "
-                "Install with: pip install google-generativeai"
+                "google-genai package not installed. "
+                "Install with: pip install google-genai"
             )
 
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
@@ -263,40 +310,61 @@ class GeminiClient(BaseLLMClient):
                 "Set GOOGLE_API_KEY environment variable or pass google_api_key parameter."
             )
 
-        genai.configure(api_key=self.api_key)
-        self.client = genai.GenerativeModel(model)
+        self._client = genai.Client(api_key=self.api_key)
+        self._types = genai_types
+        self._model_name = model
 
     async def generate(
         self,
         prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        thinking_budget: int = 0,
         **kwargs
     ) -> str:
-        """Generate text using Gemini."""
+        """
+        Generate text using Gemini.
+
+        Args:
+            prompt: User prompt.
+            temperature: Sampling temperature.
+            max_tokens: Max output tokens. With thinking enabled, this budget
+                is shared between thinking and the final response, so set it
+                generously or disable thinking.
+            thinking_budget: Thinking tokens for Gemini 2.5+ "thinking" models.
+                Defaults to 0 (disabled) — our prompts ask for JSON or short
+                scores, so thinking wastes tokens and burns rate-limit budget.
+                Pass -1 for dynamic thinking, or a positive int for a fixed
+                thinking budget.
+        """
         try:
-            # Configure generation settings
-            generation_config = {
+            cfg_kwargs = {
                 "temperature": temperature,
                 "max_output_tokens": max_tokens,
             }
+            # Only attach a thinking_config for models that support it (2.5+).
+            # For older models the field is silently ignored by the API, but
+            # we still avoid the import-time cost if ThinkingConfig is absent.
+            ThinkingConfig = getattr(self._types, "ThinkingConfig", None)
+            if ThinkingConfig is not None:
+                cfg_kwargs["thinking_config"] = ThinkingConfig(thinking_budget=thinking_budget)
 
-            # Generate response
-            response = await self.client.generate_content_async(
-                prompt,
-                generation_config=generation_config
+            response = await self._client.aio.models.generate_content(
+                model=self._model_name,
+                contents=prompt,
+                config=self._types.GenerateContentConfig(**cfg_kwargs),
             )
 
             # Track token usage
-            if hasattr(response, 'usage_metadata'):
-                self.last_input_tokens = response.usage_metadata.prompt_token_count
-                self.last_output_tokens = response.usage_metadata.candidates_token_count
+            usage = getattr(response, "usage_metadata", None)
+            if usage is not None:
+                self.last_input_tokens = getattr(usage, "prompt_token_count", 0) or 0
+                self.last_output_tokens = getattr(usage, "candidates_token_count", 0) or 0
             else:
-                # Estimate if usage not available
                 self.last_input_tokens = len(prompt) // 4
-                self.last_output_tokens = len(response.text) // 4
+                self.last_output_tokens = len(response.text or "") // 4
 
-            return response.text
+            return response.text or ""
 
         except Exception as e:
             logger.error(f"Gemini API error: {e}")
@@ -304,11 +372,11 @@ class GeminiClient(BaseLLMClient):
 
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         """Estimate cost based on token usage."""
-        # Extract base model name (e.g., "gemini-2.0-flash" from "gemini-2.0-flash-exp")
+        # Extract base model name (e.g., "gemini-2.5-flash" from "gemini-2.5-flash-exp")
         base_model = self.model.split("-exp")[0]
         pricing = self.PRICING.get(
             base_model,
-            {"input": 0.075, "output": 0.30}  # Default to Flash pricing
+            {"input": 0.30, "output": 2.50}  # Fallback to gemini-2.5-flash pricing
         )
 
         input_cost = (input_tokens / 1_000_000) * pricing["input"]
@@ -459,9 +527,9 @@ class ModelRouter:
 
     def __init__(
         self,
-        generator_model: str = "gemini-2.0-flash",
-        verifier_model: str = "gpt-4o-mini-2024-07-18",
-        diversity_model: str = "gpt-4o-mini-2024-07-18",
+        generator_model: str = "gpt-5.4-mini",
+        verifier_model: str = "gpt-4.1-nano",
+        diversity_model: str = "gpt-4.1-nano",
         **api_keys
     ):
         self.generator = UnifiedLLMClient(generator_model, **api_keys)
