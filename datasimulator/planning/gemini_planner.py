@@ -387,11 +387,16 @@ CRITICAL: You must provide EXACTLY {num_batches} batch entries. The last batch s
 Provide ONLY the JSON output, nothing else.
 """
 
+        # The plan JSON includes ~400-600 chars per batch (topic, subtopic,
+        # guidance, focus_areas, files). At 75 batches that's ~35-45K chars,
+        # which exceeds an 8K token cap and gets truncated mid-string → the
+        # JSON parser fails and we fall back to the dumb plan. 32K tokens
+        # safely covers up to ~150 batches.
         try:
             response_text = await self._llm.generate(
                 planning_prompt,
                 temperature=0.3,
-                max_tokens=8000,
+                max_tokens=32000,
             )
             plan_text = (response_text or "").strip()
 
