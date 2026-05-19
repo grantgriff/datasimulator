@@ -36,6 +36,10 @@ BATCH_SIZE = 10                       # records per generation batch
 PARALLEL_BATCHES = 2                  # batches in flight at once
 MAX_COST_USD = 5.00                   # hard cap; generation stops if hit
 
+QUALITY_THRESHOLD = 6.0               # min score (1-10); samples below this get regenerated
+CHECKPOINT_DIR = None                 # e.g. "outputs/checkpoints" to save partial output every N samples
+CHECKPOINT_INTERVAL = 100             # save a checkpoint every N samples (ignored if CHECKPOINT_DIR is None)
+
 # For data_type="ranked" or "full":
 NUM_RESPONSES = 3                     # how many candidates per prompt
 QUALITY_SPREAD = "wide"               # "wide" (gap >5.0) or "narrow" (gap <2.5)
@@ -109,6 +113,9 @@ def main() -> None:
         batch_size=BATCH_SIZE,
         parallel_batches=PARALLEL_BATCHES,
         max_cost=MAX_COST_USD,
+        quality_threshold=QUALITY_THRESHOLD,
+        checkpoint_dir=CHECKPOINT_DIR,
+        checkpoint_interval=CHECKPOINT_INTERVAL,
         interactive=False,
     )
     if DATA_TYPE in ("ranked", "full"):
