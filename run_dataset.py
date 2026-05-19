@@ -70,9 +70,11 @@ def main() -> None:
             f"❌ {DATA_DIR}/ doesn't exist. Create it and drop your reference docs in."
         )
 
+    # Recurse into subdirectories — most people organize source docs in folders.
     sources: list[str] = []
-    for ext in ("*.pdf", "*.docx", "*.txt", "*.md"):
-        sources.extend(glob(str(data_dir / ext)))
+    for ext in ("pdf", "docx", "txt", "md"):
+        sources.extend(str(p) for p in data_dir.rglob(f"*.{ext}"))
+    sources.sort()
 
     if not sources:
         raise SystemExit(

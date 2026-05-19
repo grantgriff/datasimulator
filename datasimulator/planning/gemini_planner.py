@@ -388,15 +388,17 @@ Provide ONLY the JSON output, nothing else.
 """
 
         # The plan JSON includes ~400-600 chars per batch (topic, subtopic,
-        # guidance, focus_areas, files). At 75 batches that's ~35-45K chars,
-        # which exceeds an 8K token cap and gets truncated mid-string → the
-        # JSON parser fails and we fall back to the dumb plan. 32K tokens
-        # safely covers up to ~150 batches.
+        # guidance, focus_areas, files). At 500 batches (= 10K samples at
+        # batch_size=20) that's ~250K chars ≈ ~62K tokens. 128K leaves
+        # plenty of headroom for everything we'd reasonably generate. The
+        # LLM client auto-streams above 10K to avoid request issues.
+        # For runs beyond ~500 batches the right fix is chunking the
+        # planner output across multiple calls, not raising this further.
         try:
             response_text = await self._llm.generate(
                 planning_prompt,
                 temperature=0.3,
-                max_tokens=32000,
+                max_tokens=128000,
             )
             plan_text = (response_text or "").strip()
 
