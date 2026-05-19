@@ -500,7 +500,10 @@ Keep summary to 3-5 paragraphs maximum.
             response_text = await self._llm.generate(
                 summary_prompt,
                 temperature=0.3,
-                max_tokens=2000,
+                # High cap — long chunks can produce long summaries and we
+                # never want to truncate the planner's view of source
+                # content (see CLAUDE.md).
+                max_tokens=32000,
             )
             logger.info(f"✓ Chunk {chunk_num} summarized")
             return (response_text or "").strip()

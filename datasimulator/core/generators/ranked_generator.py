@@ -295,7 +295,9 @@ Output (JSON array only):
             raw = await self.model_router.verify(
                 scoring_prompt,
                 temperature=0.3,
-                max_tokens=200,
+                # High cap — scorer only emits a short JSON array but we
+                # never want it to truncate (see CLAUDE.md).
+                max_tokens=16000,
             )
         except Exception as e:
             logger.error(f"Error scoring ranked responses: {e}")

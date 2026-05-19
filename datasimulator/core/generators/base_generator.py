@@ -243,7 +243,10 @@ Output (JSON array only):
             response = await self.model_router.verify(
                 scoring_prompt,
                 temperature=0.3,
-                max_tokens=500
+                # High cap so 50-sample batches never truncate. The scorer
+                # only emits ~6 chars per sample (a number + comma), so we
+                # pay only for what's actually produced. See CLAUDE.md.
+                max_tokens=16000
             )
 
             # Extract JSON array
