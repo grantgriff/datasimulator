@@ -84,7 +84,7 @@ class RankedGenerator(BaseGenerator):
             response = await self.model_router.generate(
                 prompt,
                 temperature=0.9,
-                max_tokens=64000,
+                max_tokens=128000,
             )
         except Exception as e:
             logger.error(f"Error generating ranked batch: {e}")
@@ -297,7 +297,7 @@ Output (JSON array only):
                 temperature=0.3,
                 # High cap — scorer only emits a short JSON array but we
                 # never want it to truncate (see CLAUDE.md).
-                max_tokens=16000,
+                max_tokens=128000,
             )
         except Exception as e:
             logger.error(f"Error scoring ranked responses: {e}")

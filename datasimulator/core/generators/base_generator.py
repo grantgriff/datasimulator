@@ -212,13 +212,20 @@ No explanation needed, just the number.
             return []
 
         # Create batched scoring prompt
+        n = len(samples)
         samples_text = "\n\n".join([
             f"=== SAMPLE {i+1} ===\n{json.dumps(sample, indent=2)}"
             for i, sample in enumerate(samples)
         ])
 
+        # IMPORTANT: do NOT include "..." in any example. Models mimic the
+        # example pattern verbatim — a literal "..." in the example
+        # teaches them to truncate the output. This was the root cause of
+        # "Batch scoring returned 5 scores for 10 samples" in earlier runs.
+        # The example below uses a concrete N=3 case to anchor the format
+        # without inviting truncation.
         scoring_prompt = f"""
-Score each of the following {len(samples)} training data samples from 1-10 based on:
+Score each of the {n} training data samples below from 1-10 based on:
 1. Relevance to source material
 2. Accuracy and correctness
 3. Clarity and completeness
@@ -233,20 +240,25 @@ Data Type: {self.data_type_name.upper()}
 SAMPLES TO SCORE:
 {samples_text}
 
-Provide ONLY the scores as a JSON array of numbers, nothing else.
-Example: [7.5, 8.2, 6.3, 9.0, ...]
+CRITICAL OUTPUT RULES:
+- Output a JSON array of EXACTLY {n} numbers — one score per sample, in order.
+- No commentary, no markdown, no trailing comments or ellipses.
+- Decimals are OK (e.g. 7.5).
+- If you are about to output fewer than {n} numbers, STOP and produce all {n}.
 
-Output (JSON array only):
+Example for a hypothetical 3-sample batch (yours has {n}):
+[8.5, 6.2, 9.0]
+
+Now output your JSON array of EXACTLY {n} scores:
 """
 
         try:
             response = await self.model_router.verify(
                 scoring_prompt,
                 temperature=0.3,
-                # High cap so 50-sample batches never truncate. The scorer
-                # only emits ~6 chars per sample (a number + comma), so we
-                # pay only for what's actually produced. See CLAUDE.md.
-                max_tokens=16000
+                # Per CLAUDE.md: never use a low cap. 128K is the project
+                # default for any structured/batch response.
+                max_tokens=128000
             )
 
             # Extract JSON array
@@ -259,10 +271,22 @@ Output (JSON array only):
             scores = json.loads(response_clean)
 
             # Validate and clamp scores
-            if not isinstance(scores, list) or len(scores) != len(samples):
-                logger.warning(f"Batch scoring returned {len(scores)} scores for {len(samples)} samples")
-                # Fall back to default scores
-                return [5.0] * len(samples)
+            if not isinstance(scores, list) or len(scores) != n:
+                # On length mismatch: keep the partial scores we got and
+                # individually score the rest. Never silently assign 5.0
+                # to everything — that masks real quality and (combined
+                # with a quality_threshold) drops the whole batch.
+                got = len(scores) if isinstance(scores, list) else 0
+                logger.warning(
+                    f"Batch scoring returned {got} scores for {n} samples — "
+                    f"individually scoring the remaining {n - got}"
+                )
+                partial = []
+                if isinstance(scores, list):
+                    partial = [max(1.0, min(10.0, float(s))) for s in scores[:n]]
+                missing_samples = samples[len(partial):]
+                tail = [await self._score_quality(s) for s in missing_samples]
+                return partial + tail
 
             # Clamp each score to 1-10 range
             scores = [max(1.0, min(10.0, float(s))) for s in scores]

@@ -503,7 +503,7 @@ Keep summary to 3-5 paragraphs maximum.
                 # High cap — long chunks can produce long summaries and we
                 # never want to truncate the planner's view of source
                 # content (see CLAUDE.md).
-                max_tokens=32000,
+                max_tokens=128000,
             )
             logger.info(f"✓ Chunk {chunk_num} summarized")
             return (response_text or "").strip()
