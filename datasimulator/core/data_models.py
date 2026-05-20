@@ -242,6 +242,11 @@ class QualityMetrics(BaseModel):
     generation_time: float = Field(ge=0.0, description="Time in seconds")
     regeneration_count: int = Field(default=0, ge=0)
     timestamp: datetime = Field(default_factory=datetime.now)
+    # Planner attribution — populated when generation used a Gemini plan
+    # so we can do post-hoc topic-level QA without polluting the training
+    # data shape (the JSONL training file omits metrics entirely).
+    topic: Optional[str] = Field(default=None)
+    subtopic: Optional[str] = Field(default=None)
 
 
 # ============================================================================

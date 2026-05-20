@@ -633,7 +633,9 @@ Output (JSON array only):
                         generation_cost=last_cost / len(raw_samples) if len(raw_samples) > 0 else 0,
                         model_used=self.model_router.generator.model,
                         generation_time=generation_time / len(raw_samples) if len(raw_samples) > 0 else 0,
-                        regeneration_count=0
+                        regeneration_count=0,
+                        topic=topic,
+                        subtopic=subtopic,
                     )
                     batch_samples.append(DatasetSample(data=validated_data, metrics=metrics))
                 except Exception as e:
@@ -719,7 +721,9 @@ Output (JSON array only):
                                 generation_cost=regen_cost / len(regen_raw_samples) if len(regen_raw_samples) > 0 else 0,
                                 model_used=self.model_router.generator.model,
                                 generation_time=regen_generation_time / len(regen_raw_samples) if len(regen_raw_samples) > 0 else 0,
-                                regeneration_count=regeneration_attempt
+                                regeneration_count=regeneration_attempt,
+                                topic=topic,
+                                subtopic=subtopic,
                             )
                             batch_samples.append(DatasetSample(data=validated_data, metrics=metrics))
                             regen_passed += 1

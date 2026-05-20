@@ -128,6 +128,24 @@ records = [s.data.model_dump() for s in dataset.samples]
 # `records` is a List[dict] matching the output shape table above
 ```
 
+### Metadata sidecar
+
+`dataset.save("outputs/dataset.jsonl")` writes **two files**:
+
+| File | Contents |
+|---|---|
+| `outputs/dataset.jsonl` | Clean training records (no metrics). One JSON object per line. |
+| `outputs/dataset.metadata.jsonl` | Per-sample metadata, **same order** as the training file. One JSON object per line: `{idx, quality_score, topic, subtopic, token_count, generation_cost, model_used, regeneration_count, generation_time, timestamp}` |
+
+Join them by line index (`idx`) for post-hoc QA: "what's the avg quality
+per topic?", "which batches cost the most?", "did Revenue Recognition
+underperform?". The sidecar is always written — there's no opt-out
+because the cost is negligible and the data is otherwise lost when the
+process exits.
+
+`topic` and `subtopic` are populated when generation used a Gemini plan
+(`enable_planning=True`); they're `null` for plan-less runs.
+
 ## Progress callbacks
 
 Pass `progress_callback=fn` to receive structured events for your UI

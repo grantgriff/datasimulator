@@ -90,12 +90,39 @@ class GeneratedDataset:
         print(f"\n✅ Dataset saved to: {output_path}")
 
     def _save_jsonl(self, output_path: Path):
-        """Save as JSONL (one JSON object per line)."""
+        """
+        Save as JSONL (one JSON object per line) plus a sidecar metadata
+        file (one metadata JSON per line, in the same order).
+
+        Training file:  <name>.jsonl              — clean {messages: ...} etc.
+        Sidecar:        <name>.metadata.jsonl     — per-sample quality score,
+                                                    topic, cost, token count,
+                                                    model used, idx for joining
+                                                    back to the training file.
+        """
         with open(output_path, 'w', encoding='utf-8') as f:
             for sample in self.samples:
                 # Extract just the data portion for training
                 data_dict = sample.data.model_dump()
                 f.write(json.dumps(data_dict, ensure_ascii=False) + '\n')
+
+        sidecar_path = output_path.with_suffix(".metadata.jsonl")
+        with open(sidecar_path, 'w', encoding='utf-8') as f:
+            for idx, sample in enumerate(self.samples):
+                m = sample.metrics
+                f.write(json.dumps({
+                    "idx": idx,
+                    "quality_score": m.quality_score,
+                    "topic": m.topic,
+                    "subtopic": m.subtopic,
+                    "token_count": m.token_count,
+                    "generation_cost": m.generation_cost,
+                    "model_used": m.model_used,
+                    "regeneration_count": m.regeneration_count,
+                    "generation_time": m.generation_time,
+                    "timestamp": m.timestamp.isoformat(),
+                }, ensure_ascii=False) + '\n')
+        logger.info(f"Metadata sidecar saved to {sidecar_path}")
 
     def _save_json(self, output_path: Path):
         """Save as single JSON file with metadata."""
