@@ -265,6 +265,8 @@ class DataSimulator:
         google_api_key: Optional[str] = None,
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
+        openrouter_api_key: Optional[str] = None,
+        do_api_key: Optional[str] = None,
         progress_callback: Optional[Any] = None,
     ):
         """
@@ -300,6 +302,10 @@ class DataSimulator:
             google_api_key: Google API key for Gemini planning (or use GOOGLE_API_KEY env)
             anthropic_api_key: Anthropic API key (or use ANTHROPIC_API_KEY env)
             openai_api_key: OpenAI API key (or use OPENAI_API_KEY env)
+            openrouter_api_key: OpenRouter API key (or use OPENROUTER_API_KEY env).
+                Activates the `openrouter/<provider>/<model>` model prefix.
+            do_api_key: DigitalOcean Serverless Inference key (or use
+                DO_INFERENCE_KEY env). Activates the `do/<model>` prefix.
             progress_callback: Optional callable invoked with a dict on each
                 lifecycle event (generation_started, batch_completed,
                 checkpoint_saved, cost_limit_reached, generation_completed).
@@ -345,6 +351,8 @@ class DataSimulator:
             anthropic_api_key=anthropic_api_key,
             openai_api_key=openai_api_key,
             google_api_key=google_api_key,
+            openrouter_api_key=openrouter_api_key,
+            do_api_key=do_api_key,
         )
 
         # Setup cost tracking with interactive mode
@@ -364,6 +372,8 @@ class DataSimulator:
                     anthropic_api_key=anthropic_api_key,
                     openai_api_key=openai_api_key,
                     google_api_key=google_api_key,
+                    openrouter_api_key=openrouter_api_key,
+                    do_api_key=do_api_key,
                 )
                 logger.info(f"Gemini planning enabled (model={planner_model})")
             except Exception as e:

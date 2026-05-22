@@ -65,7 +65,38 @@ that way for any CLI/server use.
 | `openai_api_key` | `str` | reads `OPENAI_API_KEY` | Override the env var. |
 | `anthropic_api_key` | `str` | reads `ANTHROPIC_API_KEY` | Only needed if you use Claude models. |
 | `google_api_key` | `str` | reads `GOOGLE_API_KEY` | Only needed if you use Gemini models. |
+| `openrouter_api_key` | `str` | reads `OPENROUTER_API_KEY` | Activates the `openrouter/...` model prefix. |
+| `do_api_key` | `str` | reads `DO_INFERENCE_KEY` | Activates the `do/...` model prefix for DigitalOcean Serverless Inference. |
 | `progress_callback` | `Callable[[dict], None \| Awaitable[None]]` | `None` | Structured progress events for your UI. See "Progress callbacks" below. |
+
+### Provider routing
+
+Model strings determine the provider. Prefixes are checked in this order:
+
+| Prefix | Provider | Example |
+|---|---|---|
+| `openrouter/` | OpenRouter (OpenAI-compatible). Cost is read directly from the response. | `openrouter/anthropic/claude-3.5-sonnet`, `openrouter/openai/gpt-4o`, `openrouter/meta-llama/llama-3.3-70b-instruct` |
+| `do/` | DigitalOcean Serverless Inference (OpenAI-compatible). Hosts open-source models. | `do/llama3.3-70b-instruct`, `do/mistral-nemo-instruct-2407` |
+| `claude*` | Anthropic direct | `claude-3-5-sonnet-20241022` |
+| `gpt*` | OpenAI direct | `gpt-5.4-mini`, `gpt-4.1-nano` |
+| `gemini*` | Google direct | `gemini-2.5-flash` |
+| anything else | Ollama (local) | `llama3.3`, `qwen2.5` |
+
+The OpenRouter prefix wins over `claude*`/`gpt*`/`gemini*` — so
+`openrouter/openai/gpt-4o` routes to OpenRouter (one bill), not to OpenAI direct.
+
+**Mix providers in one run:**
+
+```python
+sdk = DataSimulator(
+    source="textbook.pdf",
+    generator_model="openrouter/openai/gpt-5.4-mini",   # OR for generation
+    verifier_model="do/llama3.3-70b-instruct",          # DO for cheap scoring
+    diversity_model="openrouter/openai/gpt-4.1-nano",   # OR for embeddings
+    openrouter_api_key="sk-or-...",
+    do_api_key="...",
+)
+```
 
 ## Source formats
 

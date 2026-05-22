@@ -33,14 +33,18 @@ class GeminiPlanner:
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
         google_api_key: Optional[str] = None,
+        openrouter_api_key: Optional[str] = None,
+        do_api_key: Optional[str] = None,
     ):
         """
         Initialize the LLM-backed planner.
 
         Provider is detected from the model name prefix:
-            gpt-*    → OpenAI
-            claude-* → Anthropic
-            gemini-* → Google
+            gpt-*           → OpenAI
+            claude-*        → Anthropic
+            gemini-*        → Google
+            openrouter/...  → OpenRouter (OpenAI-compatible)
+            do/...          → DigitalOcean Serverless Inference
 
         Args:
             api_key: Convenience param — auto-routes to the matching provider
@@ -56,9 +60,15 @@ class GeminiPlanner:
             "anthropic_api_key": anthropic_api_key,
             "openai_api_key": openai_api_key,
             "google_api_key": google_api_key,
+            "openrouter_api_key": openrouter_api_key,
+            "do_api_key": do_api_key,
         }
         if api_key and not any(keys.values()):
-            if model.startswith("claude"):
+            if model.startswith("openrouter/"):
+                keys["openrouter_api_key"] = api_key
+            elif model.startswith("do/"):
+                keys["do_api_key"] = api_key
+            elif model.startswith("claude"):
                 keys["anthropic_api_key"] = api_key
             elif model.startswith("gemini"):
                 keys["google_api_key"] = api_key
