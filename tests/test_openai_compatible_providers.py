@@ -1,4 +1,5 @@
-"""Tests for OpenRouter and DigitalOcean Serverless Inference routing."""
+"""Tests for OpenAI-compatible providers: OpenRouter, Cloudflare Workers AI,
+and DigitalOcean Serverless Inference."""
 
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,7 +20,8 @@ from datasimulator.core.models.llm_client import (
 def _clear_env(monkeypatch):
     """Strip any provider env vars so tests are deterministic."""
     for k in ("OPENROUTER_API_KEY", "DO_INFERENCE_KEY", "OPENAI_API_KEY",
-              "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
+              "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
+              "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -151,3 +153,95 @@ def test_warning_only_fires_once_per_model(caplog):
         client.estimate_cost(100, 100)
     warns = [r for r in caplog.records if "No pricing known" in r.message]
     assert len(warns) == 1
+
+
+# ----------------------------------------------------------------------
+# Cloudflare Workers AI
+# ----------------------------------------------------------------------
+
+def test_cf_prefix_routes_to_compatible_client():
+    client = UnifiedLLMClient(
+        "cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        cloudflare_api_key="cf-token",
+        cloudflare_account_id="acct-123",
+    )
+    assert isinstance(client.client, OpenAICompatibleClient)
+    # The "cf/" prefix is stripped — the "@cf/" namespace is part of the
+    # model name as CF expects it.
+    assert client.client.model == "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+    assert client.client._provider_label == "Cloudflare Workers AI"
+
+
+def test_cf_url_contains_account_id():
+    client = UnifiedLLMClient(
+        "cf/@cf/openai/gpt-oss-120b",
+        cloudflare_api_key="cf-token",
+        cloudflare_account_id="my-acct-id-abc",
+    )
+    base_url = str(client.client.client.base_url)
+    assert "my-acct-id-abc" in base_url
+    assert "api.cloudflare.com/client/v4/accounts/my-acct-id-abc/ai/v1" in base_url
+
+
+def test_cf_requires_account_id():
+    """Missing account ID should fail with a helpful message."""
+    with pytest.raises(ValueError, match="CLOUDFLARE_ACCOUNT_ID"):
+        UnifiedLLMClient(
+            "cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            cloudflare_api_key="cf-token",
+        )
+
+
+def test_cf_requires_api_token_when_no_env(monkeypatch):
+    """Account ID present but no token should fail at the AsyncOpenAI step."""
+    with pytest.raises(ValueError, match="CLOUDFLARE_API_TOKEN"):
+        UnifiedLLMClient(
+            "cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            cloudflare_account_id="acct-123",
+        )
+
+
+def test_cf_picks_up_env_vars(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "from-env-token")
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "from-env-acct")
+    client = UnifiedLLMClient("cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast")
+    assert client.client.api_key == "from-env-token"
+    assert "from-env-acct" in str(client.client.client.base_url)
+
+
+def test_cf_explicit_args_override_env(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "env-token")
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "env-acct")
+    client = UnifiedLLMClient(
+        "cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        cloudflare_api_key="explicit-token",
+        cloudflare_account_id="explicit-acct",
+    )
+    assert client.client.api_key == "explicit-token"
+    assert "explicit-acct" in str(client.client.client.base_url)
+
+
+def test_cf_cost_uses_known_pricing():
+    client = OpenAICompatibleClient(
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        base_url="https://api.cloudflare.com/client/v4/accounts/x/ai/v1",
+        api_key="cf-token",
+        provider_label="Cloudflare Workers AI",
+    )
+    # 1M input + 1M output × CF rates ($0.29 + $2.25)
+    cost = client.estimate_cost(input_tokens=1_000_000, output_tokens=1_000_000)
+    assert cost == pytest.approx(0.29 + 2.25)
+
+
+def test_provider_prefixes_dont_collide():
+    """cf/ openrouter/ do/ are all distinct — make sure prefix routing
+    isn't ambiguous for model strings that happen to share segments."""
+    cf = UnifiedLLMClient("cf/@cf/openai/gpt-oss-120b",
+                         cloudflare_api_key="t", cloudflare_account_id="a")
+    or_ = UnifiedLLMClient("openrouter/openai/gpt-oss-120b",
+                          openrouter_api_key="t")
+    do = UnifiedLLMClient("do/llama3.3-70b-instruct", do_api_key="t")
+
+    assert "cloudflare.com" in str(cf.client.client.base_url)
+    assert "openrouter.ai" in str(or_.client.client.base_url)
+    assert "do-ai.run" in str(do.client.client.base_url)

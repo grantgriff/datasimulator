@@ -35,6 +35,8 @@ class GeminiPlanner:
         google_api_key: Optional[str] = None,
         openrouter_api_key: Optional[str] = None,
         do_api_key: Optional[str] = None,
+        cloudflare_api_key: Optional[str] = None,
+        cloudflare_account_id: Optional[str] = None,
     ):
         """
         Initialize the LLM-backed planner.
@@ -44,6 +46,7 @@ class GeminiPlanner:
             claude-*        → Anthropic
             gemini-*        → Google
             openrouter/...  → OpenRouter (OpenAI-compatible)
+            cf/...          → Cloudflare Workers AI (OpenAI-compatible)
             do/...          → DigitalOcean Serverless Inference
 
         Args:
@@ -52,6 +55,8 @@ class GeminiPlanner:
                 explicitly if you need finer control.
             model: Model name (default: gpt-5.4).
             chunk_overlap: Fraction of chunk to overlap with next (0.0-0.5).
+            cloudflare_account_id: Required when model uses the `cf/` prefix.
+                Falls back to CLOUDFLARE_ACCOUNT_ID env var.
         """
         from ..core.models.llm_client import UnifiedLLMClient
 
@@ -62,10 +67,13 @@ class GeminiPlanner:
             "google_api_key": google_api_key,
             "openrouter_api_key": openrouter_api_key,
             "do_api_key": do_api_key,
+            "cloudflare_api_key": cloudflare_api_key,
         }
         if api_key and not any(keys.values()):
             if model.startswith("openrouter/"):
                 keys["openrouter_api_key"] = api_key
+            elif model.startswith("cf/"):
+                keys["cloudflare_api_key"] = api_key
             elif model.startswith("do/"):
                 keys["do_api_key"] = api_key
             elif model.startswith("claude"):
@@ -75,7 +83,13 @@ class GeminiPlanner:
             else:  # gpt-* and default
                 keys["openai_api_key"] = api_key
 
-        self._llm = UnifiedLLMClient(model, **keys)
+        # cloudflare_account_id rides alongside the key — not an API key
+        # itself, but the CF base URL is templated with it.
+        self._llm = UnifiedLLMClient(
+            model,
+            cloudflare_account_id=cloudflare_account_id,
+            **keys,
+        )
         self._model_name = model
 
         # Conservative chunk size that fits in any modern model's context.

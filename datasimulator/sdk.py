@@ -267,6 +267,8 @@ class DataSimulator:
         openai_api_key: Optional[str] = None,
         openrouter_api_key: Optional[str] = None,
         do_api_key: Optional[str] = None,
+        cloudflare_api_key: Optional[str] = None,
+        cloudflare_account_id: Optional[str] = None,
         progress_callback: Optional[Any] = None,
     ):
         """
@@ -306,6 +308,11 @@ class DataSimulator:
                 Activates the `openrouter/<provider>/<model>` model prefix.
             do_api_key: DigitalOcean Serverless Inference key (or use
                 DO_INFERENCE_KEY env). Activates the `do/<model>` prefix.
+            cloudflare_api_key: Cloudflare API token (or use CLOUDFLARE_API_TOKEN
+                env). Activates the `cf/<model>` prefix for Workers AI.
+            cloudflare_account_id: Cloudflare account ID (or use
+                CLOUDFLARE_ACCOUNT_ID env). Required when using `cf/...` —
+                CF's endpoint URL embeds the account ID.
             progress_callback: Optional callable invoked with a dict on each
                 lifecycle event (generation_started, batch_completed,
                 checkpoint_saved, cost_limit_reached, generation_completed).
@@ -353,6 +360,8 @@ class DataSimulator:
             google_api_key=google_api_key,
             openrouter_api_key=openrouter_api_key,
             do_api_key=do_api_key,
+            cloudflare_api_key=cloudflare_api_key,
+            cloudflare_account_id=cloudflare_account_id,
         )
 
         # Setup cost tracking with interactive mode
@@ -374,6 +383,8 @@ class DataSimulator:
                     google_api_key=google_api_key,
                     openrouter_api_key=openrouter_api_key,
                     do_api_key=do_api_key,
+                    cloudflare_api_key=cloudflare_api_key,
+                    cloudflare_account_id=cloudflare_account_id,
                 )
                 logger.info(f"Gemini planning enabled (model={planner_model})")
             except Exception as e:

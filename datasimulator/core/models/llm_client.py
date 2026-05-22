@@ -7,6 +7,8 @@ Supports:
 - Google Gemini (gemini-2.5-pro, etc.)
 - OpenRouter (openrouter/<provider>/<model>) — OpenAI-compatible, one bill
   for any model. Cost is read directly from response.usage.cost.
+- Cloudflare Workers AI (cf/<model>) — OpenAI-compatible, edge-hosted
+  open-source models. Requires CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID.
 - DigitalOcean Serverless Inference (do/<model>) — OpenAI-compatible, hosts
   open-source models (Llama, Mistral, DeepSeek, Qwen).
 - Ollama (local models: qwen2.5, llama3, etc.)
@@ -300,7 +302,7 @@ class OpenAICompatibleClient(OpenAIClient):
 
     # Published per-1M-token rates for models where we don't get usage.cost
     # back from the provider. Keep this short — OpenRouter handles its own
-    # billing surface, so this is mostly for DO Serverless Inference.
+    # billing surface, so this is mostly for DO + Cloudflare.
     EXTRA_PRICING: Dict[str, Dict[str, float]] = {
         # DigitalOcean Serverless Inference (May 2026 rates)
         "llama3.3-70b-instruct": {"input": 0.59, "output": 0.79},
@@ -308,6 +310,17 @@ class OpenAICompatibleClient(OpenAIClient):
         "mistral-nemo-instruct-2407": {"input": 0.15, "output": 0.15},
         "deepseek-r1-distill-llama-70b": {"input": 0.75, "output": 1.00},
         "qwen2.5-72b-instruct": {"input": 0.59, "output": 0.79},
+        # Cloudflare Workers AI (May 2026 rates). CF bills in "neurons" but
+        # publishes per-token equivalents for the OpenAI-compatible models.
+        # The "@cf/..." prefix is part of the model ID as CF returns it.
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast": {"input": 0.29, "output": 2.25},
+        "@cf/meta/llama-3.1-70b-instruct": {"input": 0.29, "output": 2.25},
+        "@cf/meta/llama-3.1-8b-instruct": {"input": 0.28, "output": 0.83},
+        "@cf/openai/gpt-oss-120b": {"input": 0.35, "output": 0.75},
+        "@cf/openai/gpt-oss-20b": {"input": 0.20, "output": 0.30},
+        "@cf/google/gemma-3-12b-it": {"input": 0.35, "output": 0.56},
+        "@cf/mistralai/mistral-small-3.1-24b-instruct": {"input": 0.35, "output": 0.56},
+        "@cf/qwen/qwq-32b": {"input": 0.66, "output": 1.00},
     }
 
     _missing_price_warned: set = set()
@@ -597,6 +610,8 @@ class UnifiedLLMClient:
         google_api_key: Optional[str] = None,
         openrouter_api_key: Optional[str] = None,
         do_api_key: Optional[str] = None,
+        cloudflare_api_key: Optional[str] = None,
+        cloudflare_account_id: Optional[str] = None,
         ollama_host: str = "http://localhost:11434"
     ):
         self.model = model
@@ -607,6 +622,8 @@ class UnifiedLLMClient:
             google_api_key=google_api_key,
             openrouter_api_key=openrouter_api_key,
             do_api_key=do_api_key,
+            cloudflare_api_key=cloudflare_api_key,
+            cloudflare_account_id=cloudflare_account_id,
             ollama_host=ollama_host,
         )
 
@@ -619,9 +636,35 @@ class UnifiedLLMClient:
         google_api_key: Optional[str],
         openrouter_api_key: Optional[str],
         do_api_key: Optional[str],
+        cloudflare_api_key: Optional[str],
+        cloudflare_account_id: Optional[str],
         ollama_host: str
     ) -> BaseLLMClient:
         """Create appropriate client based on model name."""
+        # Cloudflare Workers AI — its base URL contains the account ID, so
+        # it can't live in the static OPENAI_COMPATIBLE_PROVIDERS registry.
+        # Handle it explicitly before the generic dispatch.
+        if model.startswith("cf/"):
+            account_id = cloudflare_account_id or os.getenv("CLOUDFLARE_ACCOUNT_ID")
+            if not account_id:
+                raise ValueError(
+                    "Cloudflare Workers AI requires an account ID. Set "
+                    "CLOUDFLARE_ACCOUNT_ID env var or pass cloudflare_account_id."
+                )
+            routed_model = model[len("cf/"):]
+            base_url = (
+                f"https://api.cloudflare.com/client/v4/accounts/"
+                f"{account_id}/ai/v1"
+            )
+            logger.info(f"Using Cloudflare Workers AI: {routed_model}")
+            return OpenAICompatibleClient(
+                model=routed_model,
+                base_url=base_url,
+                api_key=cloudflare_api_key,
+                env_var="CLOUDFLARE_API_TOKEN",
+                provider_label="Cloudflare Workers AI",
+            )
+
         # OpenAI-compatible providers — check prefixes first so they win
         # over the generic "claude-*"/"gpt-*" detection below (an OpenRouter
         # model name like `openrouter/openai/gpt-4o` shouldn't route to the
