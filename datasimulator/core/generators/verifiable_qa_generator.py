@@ -378,6 +378,128 @@ Return ONLY the JSON array, no other text.
             logger.debug(f"Validation failed: {e}")
             return False
 
+    # ----------- QA-specific quality scoring -----------
+    # The base scorer's generic rubric (relevance/accuracy/clarity/completeness/
+    # instruction_quality) is a bad fit for verifiable QA records: there is no
+    # assistant response to evaluate, only a question + ground truth, so
+    # verifiers default to ~10 for any well-formed pair. The overnight run
+    # showed openrouter_scale_qa collapsing to 100% exact 10.0. We replace it
+    # with a QA-specific rubric that targets the real failure modes (ambiguous
+    # questions, ground truths too verbose for exact_match, untestable answers).
+
+    def _qa_scoring_rubric(self) -> str:
+        return f"""
+You are evaluating training samples for VERIFIABLE QA. Each sample has a
+question (`prompt`), a single correct answer (`ground_truth`), and a
+verification mode (`verification_type` = {self.verification_type}). There is
+NO assistant response — the ground truth IS the expected response.
+
+Rate on these QA-specific dimensions (1-10 each):
+- **Unambiguity**: would two competent experts give the SAME ground truth?
+  Penalize hard if the question has multiple defensible answers.
+- **Verifiability for `{self.verification_type}`**: can the ground truth
+  actually be matched by this verifier? For exact_match/numeric_match,
+  penalize verbose or formatted-prose ground truths. For contains/regex,
+  penalize if the pattern is brittle.
+- **Source-groundedness**: is the question answerable from the source
+  material below, not just general knowledge? Penalize "trivia from the
+  domain that isn't in the source".
+- **Non-triviality**: is the question genuinely testing understanding,
+  not just copy/paste from the source? Penalize verbatim restatements.
+- **Calibration**: does the difficulty match what an expert would assign?
+  Penalize trivially easy or impossibly hard for this domain.
+
+Output ONE overall score per sample = weighted average of the above (the
+weakest dimension should dominate — a sample with verifiability=3 should
+NOT score above 5 overall, even if the other dimensions are 10).
+"""
+
+    async def _score_quality(self, sample: Dict[str, Any]) -> float:
+        """Single-sample QA scorer. Override of BaseGenerator._score_quality."""
+        scoring_prompt = f"""{self._qa_scoring_rubric()}
+
+Source Context:
+{self.source_content[:1000] if self.source_content else "No source context provided"}
+
+Sample to score:
+{json.dumps(sample, indent=2)}
+
+Provide ONLY a single number from 1-10 (decimals like 7.5 are fine). No
+explanation. The weakest QA dimension dominates the overall score.
+"""
+        try:
+            response = await self.model_router.verify(
+                scoring_prompt,
+                temperature=0.3,
+                max_tokens=10,
+            )
+            score = float(response.strip())
+            return max(1.0, min(10.0, score))
+        except Exception as e:
+            logger.error(f"Error scoring QA sample: {e}")
+            return 5.0
+
+    async def _score_quality_batch(self, samples: List[Dict[str, Any]]) -> List[float]:
+        """Batched QA scorer. Override of BaseGenerator._score_quality_batch."""
+        if not samples:
+            return []
+
+        n = len(samples)
+        samples_text = "\n\n".join(
+            f"=== SAMPLE {i+1} ===\n{json.dumps(s, indent=2)}"
+            for i, s in enumerate(samples)
+        )
+        scoring_prompt = f"""{self._qa_scoring_rubric()}
+
+Source Context:
+{self.source_content[:1000] if self.source_content else "No source context provided"}
+
+SAMPLES TO SCORE:
+{samples_text}
+
+CRITICAL OUTPUT RULES:
+- Output a JSON array of EXACTLY {n} numbers — one overall score per sample,
+  in order. The weakest QA dimension dominates each overall score.
+- No commentary, no markdown, no trailing comments or ellipses.
+- Decimals are OK (e.g. 7.5).
+- If you are about to output fewer than {n} numbers, STOP and produce all {n}.
+
+Example for a hypothetical 3-sample batch (yours has {n}):
+[8.5, 4.0, 7.0]
+
+Now output your JSON array of EXACTLY {n} scores:
+"""
+        try:
+            response = await self.model_router.verify(
+                scoring_prompt,
+                temperature=0.3,
+                max_tokens=128000,
+            )
+            clean = response.strip()
+            if "```json" in clean:
+                clean = clean.split("```json")[1].split("```")[0].strip()
+            elif "```" in clean:
+                clean = clean.split("```")[1].split("```")[0].strip()
+
+            scores = json.loads(clean)
+            if not isinstance(scores, list) or len(scores) != n:
+                got = len(scores) if isinstance(scores, list) else 0
+                logger.warning(
+                    f"QA batch scoring returned {got} scores for {n} samples — "
+                    f"individually scoring the remaining {n - got}"
+                )
+                partial = [max(1.0, min(10.0, float(s)))
+                           for s in (scores or [])[:n]]
+                tail = [await self._score_quality(s)
+                        for s in samples[len(partial):]]
+                return partial + tail
+            return [max(1.0, min(10.0, float(s))) for s in scores]
+        except Exception as e:
+            logger.warning(
+                f"QA batch scoring failed ({e}); falling back to individual scoring"
+            )
+            return [await self._score_quality(s) for s in samples]
+
     def set_verification_type(
         self,
         verification_type: Literal[
