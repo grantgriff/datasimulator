@@ -172,6 +172,37 @@ class ClaudeClient(BaseLLMClient):
         return input_cost + output_cost
 
 
+def _openai_compatible_output_ceiling(model: str) -> int:
+    """Safe max output tokens for an OpenAI-compatible model.
+
+    Newer OpenAI models reject requests with `max_tokens` above their
+    actual completion ceiling (HTTP 400, no completion). Callers are
+    encouraged by CLAUDE.md to ask for very high values for headroom, so
+    we clamp here rather than pushing the limit knowledge upstream. Per
+    family ceilings reflect OpenAI's published limits as of May 2026.
+    """
+    m = model.lower()
+    # OpenRouter "openai/<model>" — strip provider prefix for matching.
+    if "/" in m:
+        m = m.split("/")[-1]
+    # GPT-5.x and 4.1 families: 32K completion tokens
+    if m.startswith("gpt-5") or m.startswith("gpt-4.1"):
+        return 32768
+    # Reasoning models
+    if m.startswith("o1") or m.startswith("o3") or m.startswith("o4"):
+        return 32768
+    # GPT-4o family: 16K
+    if m.startswith("gpt-4o") or m.startswith("gpt-4-turbo") or m.startswith("gpt-4"):
+        return 16384
+    # Cloudflare-routed open models — most cap at 4-8K
+    if "llama-3.1-8b" in m or "llama-3.2" in m:
+        return 8192
+    if "llama-3.1-70b" in m or "llama-3.3" in m or "mistral" in m or "qwen" in m or "gemma" in m:
+        return 8192
+    # Default conservative fallback
+    return 16384
+
+
 class OpenAIClient(BaseLLMClient):
     """OpenAI API client."""
 
@@ -241,6 +272,7 @@ class OpenAIClient(BaseLLMClient):
     ) -> str:
         """Generate text using OpenAI."""
         try:
+            max_tokens = min(max_tokens, _openai_compatible_output_ceiling(self.model))
             call_kwargs = {
                 "model": self.model,
                 "messages": [{"role": "user", "content": prompt}],
@@ -365,6 +397,7 @@ class OpenAICompatibleClient(OpenAIClient):
         # before returning. We do this by reading usage off the response
         # directly; OpenAIClient stores last_input/output tokens but not cost.
         try:
+            max_tokens = min(max_tokens, _openai_compatible_output_ceiling(self.model))
             call_kwargs = {
                 "model": self.model,
                 "messages": [{"role": "user", "content": prompt}],
