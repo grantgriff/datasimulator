@@ -59,7 +59,7 @@ class QualityScorer:
             response = await self.verifier_client.generate(
                 scoring_prompt,
                 temperature=0.2,  # Low temp for consistent scoring
-                max_tokens=500
+                max_tokens=128000  # see CLAUDE.md — never use low caps
             )
 
             # Parse response

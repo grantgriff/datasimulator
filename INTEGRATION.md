@@ -65,7 +65,62 @@ that way for any CLI/server use.
 | `openai_api_key` | `str` | reads `OPENAI_API_KEY` | Override the env var. |
 | `anthropic_api_key` | `str` | reads `ANTHROPIC_API_KEY` | Only needed if you use Claude models. |
 | `google_api_key` | `str` | reads `GOOGLE_API_KEY` | Only needed if you use Gemini models. |
+| `openrouter_api_key` | `str` | reads `OPENROUTER_API_KEY` | Activates the `openrouter/...` model prefix. |
+| `cloudflare_api_key` | `str` | reads `CLOUDFLARE_API_TOKEN` | Activates the `cf/...` model prefix for Cloudflare Workers AI. |
+| `cloudflare_account_id` | `str` | reads `CLOUDFLARE_ACCOUNT_ID` | Required with `cf/...`. CF's endpoint URL embeds the account ID. |
+| `do_api_key` | `str` | reads `DO_INFERENCE_KEY` | Activates the `do/...` model prefix for DigitalOcean Serverless Inference. |
 | `progress_callback` | `Callable[[dict], None \| Awaitable[None]]` | `None` | Structured progress events for your UI. See "Progress callbacks" below. |
+
+### Provider routing
+
+Model strings determine the provider. Prefixes are checked in this order:
+
+| Prefix | Provider | Example |
+|---|---|---|
+| `openrouter/` | OpenRouter (OpenAI-compatible). Cost is read directly from the response. | `openrouter/anthropic/claude-3.5-sonnet`, `openrouter/openai/gpt-4o`, `openrouter/meta-llama/llama-3.3-70b-instruct` |
+| `cf/` | Cloudflare Workers AI (OpenAI-compatible). Edge-hosted OSS models. | `cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast`, `cf/@cf/openai/gpt-oss-120b`, `cf/@cf/google/gemma-3-12b-it` |
+| `do/` | DigitalOcean Serverless Inference (OpenAI-compatible). Hosts open-source models. | `do/llama3.3-70b-instruct`, `do/mistral-nemo-instruct-2407` |
+| `claude*` | Anthropic direct | `claude-3-5-sonnet-20241022` |
+| `gpt*` | OpenAI direct | `gpt-5.4-mini`, `gpt-4.1-nano` |
+| `gemini*` | Google direct | `gemini-2.5-flash` |
+| anything else | Ollama (local) | `llama3.3`, `qwen2.5` |
+
+The proxy prefixes (`openrouter/`, `cf/`, `do/`) win over `claude*`/`gpt*`/`gemini*` —
+so `openrouter/openai/gpt-4o` routes to OpenRouter (one bill), not to OpenAI direct.
+
+### Switching between OpenRouter and Cloudflare
+
+The common case for this SDK — use OpenRouter for frontier-quality
+generation and Cloudflare for cheap bulk work (e.g. verification scoring):
+
+```python
+sdk = DataSimulator(
+    source="textbook.pdf",
+    generator_model="openrouter/openai/gpt-5.4-mini",
+    verifier_model="cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    diversity_model="cf/@cf/google/gemma-3-12b-it",
+    # Keys can also come from env vars
+    openrouter_api_key="sk-or-...",
+    cloudflare_api_key="cf-token-...",
+    cloudflare_account_id="your-acct-id",
+)
+```
+
+Or flip the same flow to fully OpenRouter or fully CF without changing
+anything else — just swap the model strings.
+
+**Mix providers in one run:**
+
+```python
+sdk = DataSimulator(
+    source="textbook.pdf",
+    generator_model="openrouter/openai/gpt-5.4-mini",   # OR for generation
+    verifier_model="do/llama3.3-70b-instruct",          # DO for cheap scoring
+    diversity_model="openrouter/openai/gpt-4.1-nano",   # OR for embeddings
+    openrouter_api_key="sk-or-...",
+    do_api_key="...",
+)
+```
 
 ## Source formats
 
@@ -127,6 +182,24 @@ dataset = sdk.generate(...)
 records = [s.data.model_dump() for s in dataset.samples]
 # `records` is a List[dict] matching the output shape table above
 ```
+
+### Metadata sidecar
+
+`dataset.save("outputs/dataset.jsonl")` writes **two files**:
+
+| File | Contents |
+|---|---|
+| `outputs/dataset.jsonl` | Clean training records (no metrics). One JSON object per line. |
+| `outputs/dataset.metadata.jsonl` | Per-sample metadata, **same order** as the training file. One JSON object per line: `{idx, quality_score, topic, subtopic, token_count, generation_cost, model_used, regeneration_count, generation_time, timestamp}` |
+
+Join them by line index (`idx`) for post-hoc QA: "what's the avg quality
+per topic?", "which batches cost the most?", "did Revenue Recognition
+underperform?". The sidecar is always written — there's no opt-out
+because the cost is negligible and the data is otherwise lost when the
+process exits.
+
+`topic` and `subtopic` are populated when generation used a Gemini plan
+(`enable_planning=True`); they're `null` for plan-less runs.
 
 ## Progress callbacks
 

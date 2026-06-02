@@ -84,7 +84,7 @@ class RankedGenerator(BaseGenerator):
             response = await self.model_router.generate(
                 prompt,
                 temperature=0.9,
-                max_tokens=64000,
+                max_tokens=128000,
             )
         except Exception as e:
             logger.error(f"Error generating ranked batch: {e}")
@@ -266,15 +266,46 @@ OUTPUT: JSON array of EXACTLY {batch_size} records. ONLY the JSON array, no othe
         }
 
     async def _score_responses(self, prompt_text: str, responses: List[str]) -> List[float]:
-        """Score N candidate responses to a single prompt via the verifier model."""
+        """Score N candidate responses to a single prompt via the verifier model.
+
+        Uses the same STRICT 1-10 rubric as BaseGenerator._score_quality_batch
+        so that scores in Ranked records are comparable to scores in SFT/DPO/QA.
+        Score-7 means the same thing here as it does in an SFT record.
+        """
         responses_block = "\n\n".join(
             f"=== RESPONSE {i+1} ===\n{r}" for i, r in enumerate(responses)
         )
+        n = len(responses)
 
         scoring_prompt = f"""
-Score each candidate response to the same prompt from 1-10 on overall quality
-(accuracy, completeness, clarity, relevance). Each response is INDEPENDENT — score
-them on absolute quality, not relative to each other.
+You are a STRICT quality assessor for ML training data. Default to skepticism —
+most candidate responses are mediocre, and your scores should reflect that.
+Generous scoring lets bad responses into preference data, which weakens
+downstream rank-based training.
+
+Score each of the {n} candidate RESPONSES to the same PROMPT from 1-10 on
+a STRICT rubric. Each response is INDEPENDENT — score on absolute quality,
+not relative to the others.
+
+  1-3  FAIL: factual errors, off-topic, unparsable, plagiarized verbatim
+        from the source, or so short/generic it provides no training
+        signal. Use freely for any response that shouldn't ship.
+        SPECIFIC FAILURE MODES — score ≤3 if any apply:
+          • Response contains a FACTUAL ERROR (wrong claim, wrong number,
+            wrong rule, misattribution).
+          • Response RESTATES THE QUESTION without adding information.
+  4-5  WEAK: technically valid but adds nothing the source doesn't
+        already contain. Generic phrasing. THIS IS THE DEFAULT for
+        unremarkable responses — only go higher with specific evidence.
+  6    PASSING: shows basic understanding, no clear flaws, adds at
+        least ONE specific detail useful for training.
+  7-8  GOOD: clearly above median. Demonstrates depth, specificity, or
+        pedagogical structure beyond a paraphrase of the source.
+  9    VERY GOOD: exemplary on multiple dimensions; hard to improve. Rare.
+  10   PERFECT: top-tier response; very rare (<5% of responses).
+
+Dimensions: relevance to prompt, factual accuracy, clarity, useful depth
+beyond source, instruction-following.
 
 Source Context:
 {self.source_content[:1000] if self.source_content else "(none provided)"}
@@ -285,17 +316,30 @@ PROMPT:
 CANDIDATE RESPONSES:
 {responses_block}
 
-Output a JSON array of {len(responses)} numbers in 1-10 range, one per response, in order.
-Example: [8.5, 6.2, 4.1, 2.5]
+CRITICAL CALIBRATION RULES — read before scoring:
+- DEFAULT to 5 unless you can name a specific reason to go higher.
+- Aim for a realistic spread across these {n} responses.
+- Do not score generously out of politeness. Mediocre responses get 5.
 
-Output (JSON array only):
+CRITICAL OUTPUT RULES:
+- Output a JSON array of EXACTLY {n} numbers in 1-10 range, one per
+  response, in order. No commentary, no markdown.
+- Decimals are OK (e.g. 5.5, 7.2).
+
+Example for a hypothetical 4-response batch (yours has {n}) — note the
+range across fail / weak / good / strong:
+[3.0, 5.5, 7.0, 8.5]
+
+Now output your JSON array of EXACTLY {n} scores:
 """
 
         try:
             raw = await self.model_router.verify(
                 scoring_prompt,
                 temperature=0.3,
-                max_tokens=200,
+                # High cap — scorer only emits a short JSON array but we
+                # never want it to truncate (see CLAUDE.md).
+                max_tokens=128000,
             )
         except Exception as e:
             logger.error(f"Error scoring ranked responses: {e}")
@@ -378,16 +422,29 @@ Output (JSON array only):
 
     async def _score_quality_batch(self, samples: List[Dict[str, Any]]) -> List[float]:
         """
-        For ranked records, each response was already scored individually by
-        the verifier inside `_generate_batch`. The sample-level quality is
-        just the rank-1 score (the best response we'd actually ship as a
-        gold answer / chosen response).
+        Sample-level quality for a ranked record = the rank-1 (best) response's
+        score. This is what gets compared against quality_threshold to decide
+        whether the record is good enough to ship.
 
-        Overrides the base class's batch scoring, which serializes the whole
-        record and sends it to the verifier — but the nested ranked_responses
-        array confuses the verifier into scoring each inner response, so it
-        returns the wrong number of scores and every sample falls back to
-        the default 5.0 (which trips the quality threshold).
+        Ranked records are gated by TWO independent checks:
+          1. rank-1 score >= quality_threshold    (this method's output;
+             enforces that the response we'd ship as 'chosen' is itself good)
+          2. _meets_quality_spread()              (enforced upstream in
+             _generate_batch; gap between rank-1 and rank-N must match the
+             configured wide/narrow target)
+
+        Per-response scores are produced via the harsh rubric in
+        _score_responses (same scale as SFT/DPO/QA). Because we surface the
+        rank-1 (highest) of N here, ranked sample scores will naturally skew
+        higher than SFT/DPO/QA scores on the same data — that's correct
+        semantics, not lenient scoring. A "ranked quality_score = 8" means
+        "the response we'd ship as the chosen answer is harsh-rubric 8".
+        For a cross-format average view, read ranked_responses[*].quality_score
+        out of the sample directly.
+
+        We override the base class's batch scorer because it would serialize
+        the whole nested ranked_responses array to the verifier, which gets
+        confused and returns the wrong number of scores.
         """
         scores: List[float] = []
         for s in samples:

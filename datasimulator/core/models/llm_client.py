@@ -4,6 +4,13 @@ Unified LLM client supporting multiple providers.
 Supports:
 - Anthropic Claude (claude-3-5-sonnet, etc.)
 - OpenAI (gpt-4, gpt-4o, gpt-4o-mini, etc.)
+- Google Gemini (gemini-2.5-pro, etc.)
+- OpenRouter (openrouter/<provider>/<model>) — OpenAI-compatible, one bill
+  for any model. Cost is read directly from response.usage.cost.
+- Cloudflare Workers AI (cf/<model>) — OpenAI-compatible, edge-hosted
+  open-source models. Requires CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID.
+- DigitalOcean Serverless Inference (do/<model>) — OpenAI-compatible, hosts
+  open-source models (Llama, Mistral, DeepSeek, Qwen).
 - Ollama (local models: qwen2.5, llama3, etc.)
 """
 
@@ -165,6 +172,37 @@ class ClaudeClient(BaseLLMClient):
         return input_cost + output_cost
 
 
+def _openai_compatible_output_ceiling(model: str) -> int:
+    """Safe max output tokens for an OpenAI-compatible model.
+
+    Newer OpenAI models reject requests with `max_tokens` above their
+    actual completion ceiling (HTTP 400, no completion). Callers are
+    encouraged by CLAUDE.md to ask for very high values for headroom, so
+    we clamp here rather than pushing the limit knowledge upstream. Per
+    family ceilings reflect OpenAI's published limits as of May 2026.
+    """
+    m = model.lower()
+    # OpenRouter "openai/<model>" — strip provider prefix for matching.
+    if "/" in m:
+        m = m.split("/")[-1]
+    # GPT-5.x and 4.1 families: 32K completion tokens
+    if m.startswith("gpt-5") or m.startswith("gpt-4.1"):
+        return 32768
+    # Reasoning models
+    if m.startswith("o1") or m.startswith("o3") or m.startswith("o4"):
+        return 32768
+    # GPT-4o family: 16K
+    if m.startswith("gpt-4o") or m.startswith("gpt-4-turbo") or m.startswith("gpt-4"):
+        return 16384
+    # Cloudflare-routed open models — most cap at 4-8K
+    if "llama-3.1-8b" in m or "llama-3.2" in m:
+        return 8192
+    if "llama-3.1-70b" in m or "llama-3.3" in m or "mistral" in m or "qwen" in m or "gemma" in m:
+        return 8192
+    # Default conservative fallback
+    return 16384
+
+
 class OpenAIClient(BaseLLMClient):
     """OpenAI API client."""
 
@@ -234,6 +272,7 @@ class OpenAIClient(BaseLLMClient):
     ) -> str:
         """Generate text using OpenAI."""
         try:
+            max_tokens = min(max_tokens, _openai_compatible_output_ceiling(self.model))
             call_kwargs = {
                 "model": self.model,
                 "messages": [{"role": "user", "content": prompt}],
@@ -273,6 +312,140 @@ class OpenAIClient(BaseLLMClient):
         input_cost = (input_tokens / 1_000_000) * pricing["input"]
         output_cost = (output_tokens / 1_000_000) * pricing["output"]
 
+        return input_cost + output_cost
+
+
+class OpenAICompatibleClient(OpenAIClient):
+    """
+    Generic client for OpenAI-compatible endpoints (OpenRouter, DigitalOcean
+    Serverless Inference, vLLM, LM Studio, etc.).
+
+    Inherits OpenAIClient's request shaping so model-family detection (the
+    `max_tokens` vs `max_completion_tokens` split) still works. The only
+    difference is `base_url` and where the API key comes from.
+
+    Cost accounting:
+    - If the provider returns a `cost` field in `response.usage` (OpenRouter
+      does this), we use that as the authoritative cost.
+    - Otherwise, we look up the model in `EXTRA_PRICING`, falling back to
+      "we don't know" (0.0) with a one-time warning. Better to under-report
+      than to invent a number.
+    """
+
+    # Published per-1M-token rates for models where we don't get usage.cost
+    # back from the provider. Keep this short — OpenRouter handles its own
+    # billing surface, so this is mostly for DO + Cloudflare.
+    EXTRA_PRICING: Dict[str, Dict[str, float]] = {
+        # DigitalOcean Serverless Inference (May 2026 rates)
+        "llama3.3-70b-instruct": {"input": 0.59, "output": 0.79},
+        "llama-3.3-70b-instruct": {"input": 0.59, "output": 0.79},
+        "mistral-nemo-instruct-2407": {"input": 0.15, "output": 0.15},
+        "deepseek-r1-distill-llama-70b": {"input": 0.75, "output": 1.00},
+        "qwen2.5-72b-instruct": {"input": 0.59, "output": 0.79},
+        # Cloudflare Workers AI (May 2026 rates). CF bills in "neurons" but
+        # publishes per-token equivalents for the OpenAI-compatible models.
+        # The "@cf/..." prefix is part of the model ID as CF returns it.
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast": {"input": 0.29, "output": 2.25},
+        "@cf/meta/llama-3.1-70b-instruct": {"input": 0.29, "output": 2.25},
+        "@cf/meta/llama-3.1-8b-instruct": {"input": 0.28, "output": 0.83},
+        "@cf/openai/gpt-oss-120b": {"input": 0.35, "output": 0.75},
+        "@cf/openai/gpt-oss-20b": {"input": 0.20, "output": 0.30},
+        "@cf/google/gemma-3-12b-it": {"input": 0.35, "output": 0.56},
+        "@cf/mistralai/mistral-small-3.1-24b-instruct": {"input": 0.35, "output": 0.56},
+        "@cf/qwen/qwq-32b": {"input": 0.66, "output": 1.00},
+    }
+
+    _missing_price_warned: set = set()
+
+    def __init__(
+        self,
+        model: str,
+        base_url: str,
+        api_key: Optional[str] = None,
+        env_var: str = "OPENAI_API_KEY",
+        provider_label: str = "openai-compatible",
+    ):
+        # Bypass OpenAIClient.__init__ — we need a custom base_url AND a
+        # custom env var name. Build the AsyncOpenAI client ourselves.
+        BaseLLMClient.__init__(self, model)
+        try:
+            from openai import AsyncOpenAI
+        except ImportError:
+            raise ImportError(
+                "openai package not installed. Install with: pip install openai"
+            )
+
+        self.api_key = api_key or os.getenv(env_var)
+        if not self.api_key:
+            raise ValueError(
+                f"API key required for {provider_label}. "
+                f"Set {env_var} env variable or pass the key explicitly."
+            )
+
+        self.client = AsyncOpenAI(api_key=self.api_key, base_url=base_url)
+        self._provider_label = provider_label
+        self._reported_cost: Optional[float] = None
+
+    async def generate(
+        self,
+        prompt: str,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        **kwargs
+    ) -> str:
+        # Reuse OpenAIClient.generate but capture the provider-reported cost
+        # before returning. We do this by reading usage off the response
+        # directly; OpenAIClient stores last_input/output tokens but not cost.
+        try:
+            max_tokens = min(max_tokens, _openai_compatible_output_ceiling(self.model))
+            call_kwargs = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                **kwargs,
+            }
+            if self._uses_new_params(self.model):
+                call_kwargs["max_completion_tokens"] = max_tokens
+                if temperature != 1.0:
+                    call_kwargs["temperature"] = temperature
+            else:
+                call_kwargs["max_tokens"] = max_tokens
+                call_kwargs["temperature"] = temperature
+
+            response = await self.client.chat.completions.create(**call_kwargs)
+
+            usage = response.usage
+            self.last_input_tokens = usage.prompt_tokens
+            self.last_output_tokens = usage.completion_tokens
+            # OpenRouter reports cost directly. Some providers tuck it under
+            # different attribute names; check a few.
+            self._reported_cost = (
+                getattr(usage, "cost", None)
+                or getattr(usage, "total_cost", None)
+            )
+
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"{self._provider_label} API error: {e}")
+            raise
+
+    def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        # Prefer the cost the provider told us directly.
+        if self._reported_cost is not None:
+            return float(self._reported_cost)
+
+        pricing = self.EXTRA_PRICING.get(self.model)
+        if pricing is None:
+            if self.model not in OpenAICompatibleClient._missing_price_warned:
+                logger.warning(
+                    f"No pricing known for {self._provider_label} model "
+                    f"'{self.model}'. Cost reported as $0; check your provider "
+                    f"dashboard for actual usage."
+                )
+                OpenAICompatibleClient._missing_price_warned.add(self.model)
+            return 0.0
+
+        input_cost = (input_tokens / 1_000_000) * pricing["input"]
+        output_cost = (output_tokens / 1_000_000) * pricing["output"]
         return input_cost + output_cost
 
 
@@ -446,32 +619,105 @@ class UnifiedLLMClient:
     - Everything else → Ollama (local)
     """
 
+    # OpenAI-compatible providers. Add new ones here.
+    OPENAI_COMPATIBLE_PROVIDERS = {
+        "openrouter/": {
+            "base_url": "https://openrouter.ai/api/v1",
+            "env_var": "OPENROUTER_API_KEY",
+            "key_kwarg": "openrouter_api_key",
+            "label": "OpenRouter",
+        },
+        "do/": {
+            "base_url": "https://inference.do-ai.run/v1",
+            "env_var": "DO_INFERENCE_KEY",
+            "key_kwarg": "do_api_key",
+            "label": "DigitalOcean Serverless Inference",
+        },
+    }
+
     def __init__(
         self,
         model: str,
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
         google_api_key: Optional[str] = None,
+        openrouter_api_key: Optional[str] = None,
+        do_api_key: Optional[str] = None,
+        cloudflare_api_key: Optional[str] = None,
+        cloudflare_account_id: Optional[str] = None,
         ollama_host: str = "http://localhost:11434"
     ):
         self.model = model
         self.client = self._create_client(
             model,
-            anthropic_api_key,
-            openai_api_key,
-            google_api_key,
-            ollama_host
+            anthropic_api_key=anthropic_api_key,
+            openai_api_key=openai_api_key,
+            google_api_key=google_api_key,
+            openrouter_api_key=openrouter_api_key,
+            do_api_key=do_api_key,
+            cloudflare_api_key=cloudflare_api_key,
+            cloudflare_account_id=cloudflare_account_id,
+            ollama_host=ollama_host,
         )
 
     def _create_client(
         self,
         model: str,
+        *,
         anthropic_api_key: Optional[str],
         openai_api_key: Optional[str],
         google_api_key: Optional[str],
+        openrouter_api_key: Optional[str],
+        do_api_key: Optional[str],
+        cloudflare_api_key: Optional[str],
+        cloudflare_account_id: Optional[str],
         ollama_host: str
     ) -> BaseLLMClient:
         """Create appropriate client based on model name."""
+        # Cloudflare Workers AI — its base URL contains the account ID, so
+        # it can't live in the static OPENAI_COMPATIBLE_PROVIDERS registry.
+        # Handle it explicitly before the generic dispatch.
+        if model.startswith("cf/"):
+            account_id = cloudflare_account_id or os.getenv("CLOUDFLARE_ACCOUNT_ID")
+            if not account_id:
+                raise ValueError(
+                    "Cloudflare Workers AI requires an account ID. Set "
+                    "CLOUDFLARE_ACCOUNT_ID env var or pass cloudflare_account_id."
+                )
+            routed_model = model[len("cf/"):]
+            base_url = (
+                f"https://api.cloudflare.com/client/v4/accounts/"
+                f"{account_id}/ai/v1"
+            )
+            logger.info(f"Using Cloudflare Workers AI: {routed_model}")
+            return OpenAICompatibleClient(
+                model=routed_model,
+                base_url=base_url,
+                api_key=cloudflare_api_key,
+                env_var="CLOUDFLARE_API_TOKEN",
+                provider_label="Cloudflare Workers AI",
+            )
+
+        # OpenAI-compatible providers — check prefixes first so they win
+        # over the generic "claude-*"/"gpt-*" detection below (an OpenRouter
+        # model name like `openrouter/openai/gpt-4o` shouldn't route to the
+        # direct OpenAI client).
+        provider_keys = {
+            "openrouter_api_key": openrouter_api_key,
+            "do_api_key": do_api_key,
+        }
+        for prefix, cfg in self.OPENAI_COMPATIBLE_PROVIDERS.items():
+            if model.startswith(prefix):
+                routed_model = model[len(prefix):]
+                logger.info(f"Using {cfg['label']}: {routed_model}")
+                return OpenAICompatibleClient(
+                    model=routed_model,
+                    base_url=cfg["base_url"],
+                    api_key=provider_keys[cfg["key_kwarg"]],
+                    env_var=cfg["env_var"],
+                    provider_label=cfg["label"],
+                )
+
         if model.startswith("claude"):
             logger.info(f"Using Anthropic Claude: {model}")
             return ClaudeClient(model, anthropic_api_key)
@@ -532,6 +778,9 @@ class ModelRouter:
         diversity_model: str = "gpt-4.1-nano",
         **api_keys
     ):
+        # api_keys may include: anthropic_api_key, openai_api_key,
+        # google_api_key, openrouter_api_key, do_api_key. We forward
+        # the same dict to all three clients — routing happens per-model.
         self.generator = UnifiedLLMClient(generator_model, **api_keys)
         self.verifier = UnifiedLLMClient(verifier_model, **api_keys)
         self.diversity = UnifiedLLMClient(diversity_model, **api_keys)

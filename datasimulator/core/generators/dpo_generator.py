@@ -111,7 +111,7 @@ class DPOGenerator(BaseGenerator):
             response = await self.model_router.generate(
                 prompt,
                 temperature=0.9,  # Higher temp for diverse responses
-                max_tokens=64000  # Hard cap at Sonnet max output tokens
+                max_tokens=128000  # see CLAUDE.md — never use low caps
             )
 
             # Parse JSON response

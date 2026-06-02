@@ -90,12 +90,39 @@ class GeneratedDataset:
         print(f"\n✅ Dataset saved to: {output_path}")
 
     def _save_jsonl(self, output_path: Path):
-        """Save as JSONL (one JSON object per line)."""
+        """
+        Save as JSONL (one JSON object per line) plus a sidecar metadata
+        file (one metadata JSON per line, in the same order).
+
+        Training file:  <name>.jsonl              — clean {messages: ...} etc.
+        Sidecar:        <name>.metadata.jsonl     — per-sample quality score,
+                                                    topic, cost, token count,
+                                                    model used, idx for joining
+                                                    back to the training file.
+        """
         with open(output_path, 'w', encoding='utf-8') as f:
             for sample in self.samples:
                 # Extract just the data portion for training
                 data_dict = sample.data.model_dump()
                 f.write(json.dumps(data_dict, ensure_ascii=False) + '\n')
+
+        sidecar_path = output_path.with_suffix(".metadata.jsonl")
+        with open(sidecar_path, 'w', encoding='utf-8') as f:
+            for idx, sample in enumerate(self.samples):
+                m = sample.metrics
+                f.write(json.dumps({
+                    "idx": idx,
+                    "quality_score": m.quality_score,
+                    "topic": m.topic,
+                    "subtopic": m.subtopic,
+                    "token_count": m.token_count,
+                    "generation_cost": m.generation_cost,
+                    "model_used": m.model_used,
+                    "regeneration_count": m.regeneration_count,
+                    "generation_time": m.generation_time,
+                    "timestamp": m.timestamp.isoformat(),
+                }, ensure_ascii=False) + '\n')
+        logger.info(f"Metadata sidecar saved to {sidecar_path}")
 
     def _save_json(self, output_path: Path):
         """Save as single JSON file with metadata."""
@@ -228,16 +255,20 @@ class DataSimulator:
         quality_threshold: float = 6.0,
         diversity_threshold: float = 0.85,
         max_cost: float = 20.0,
-        batch_size: int = 20,
+        batch_size: int = 10,
         parallel_batches: int = 4,
         interactive: bool = False,
         checkpoint_dir: Optional[str] = None,
         checkpoint_interval: int = 20,
-        enable_planning: bool = False,
+        enable_planning: bool = True,
         ranked_config: Optional[Dict[str, Any]] = None,
         google_api_key: Optional[str] = None,
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
+        openrouter_api_key: Optional[str] = None,
+        do_api_key: Optional[str] = None,
+        cloudflare_api_key: Optional[str] = None,
+        cloudflare_account_id: Optional[str] = None,
         progress_callback: Optional[Any] = None,
     ):
         """
@@ -253,7 +284,12 @@ class DataSimulator:
             quality_threshold: Minimum quality score (1-10)
             diversity_threshold: Maximum similarity for diversity (0-1)
             max_cost: Maximum cost before prompting user (USD)
-            batch_size: Number of samples per API call
+            batch_size: Number of samples per API call (default 10).
+                Each batch is one LLM call returning a JSON array of N
+                records. Higher = fewer round trips but risks hitting
+                model output ceilings (most models cap actual output
+                around 16K tokens). For dense content (1KB+ per record),
+                stay at 10 or below. See CLAUDE.md.
             parallel_batches: Number of batches to generate simultaneously (default: 4)
             interactive: Whether to prompt the user when the cost cap is hit
                 (default False — safe for programmatic / CLI integrations).
@@ -268,6 +304,15 @@ class DataSimulator:
             google_api_key: Google API key for Gemini planning (or use GOOGLE_API_KEY env)
             anthropic_api_key: Anthropic API key (or use ANTHROPIC_API_KEY env)
             openai_api_key: OpenAI API key (or use OPENAI_API_KEY env)
+            openrouter_api_key: OpenRouter API key (or use OPENROUTER_API_KEY env).
+                Activates the `openrouter/<provider>/<model>` model prefix.
+            do_api_key: DigitalOcean Serverless Inference key (or use
+                DO_INFERENCE_KEY env). Activates the `do/<model>` prefix.
+            cloudflare_api_key: Cloudflare API token (or use CLOUDFLARE_API_TOKEN
+                env). Activates the `cf/<model>` prefix for Workers AI.
+            cloudflare_account_id: Cloudflare account ID (or use
+                CLOUDFLARE_ACCOUNT_ID env). Required when using `cf/...` —
+                CF's endpoint URL embeds the account ID.
             progress_callback: Optional callable invoked with a dict on each
                 lifecycle event (generation_started, batch_completed,
                 checkpoint_saved, cost_limit_reached, generation_completed).
@@ -313,6 +358,10 @@ class DataSimulator:
             anthropic_api_key=anthropic_api_key,
             openai_api_key=openai_api_key,
             google_api_key=google_api_key,
+            openrouter_api_key=openrouter_api_key,
+            do_api_key=do_api_key,
+            cloudflare_api_key=cloudflare_api_key,
+            cloudflare_account_id=cloudflare_account_id,
         )
 
         # Setup cost tracking with interactive mode
@@ -332,6 +381,10 @@ class DataSimulator:
                     anthropic_api_key=anthropic_api_key,
                     openai_api_key=openai_api_key,
                     google_api_key=google_api_key,
+                    openrouter_api_key=openrouter_api_key,
+                    do_api_key=do_api_key,
+                    cloudflare_api_key=cloudflare_api_key,
+                    cloudflare_account_id=cloudflare_account_id,
                 )
                 logger.info(f"Gemini planning enabled (model={planner_model})")
             except Exception as e:

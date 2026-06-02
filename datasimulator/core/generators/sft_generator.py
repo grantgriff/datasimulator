@@ -108,7 +108,7 @@ class SFTGenerator(BaseGenerator):
             response = await self.model_router.generate(
                 prompt,
                 temperature=0.8,  # Higher temp for diversity
-                max_tokens=64000  # Hard cap at Sonnet max output tokens
+                max_tokens=128000  # see CLAUDE.md — never use low caps
             )
 
             # Parse JSON response
@@ -450,40 +450,67 @@ Return ONLY the JSON array, no other text.
         """
         Parse JSON response from model.
 
-        Handles various response formats and extracts JSON array.
+        Handles various response formats and extracts JSON array. Cleans
+        per-sample structural quirks via `_normalize_messages_sample`
+        before returning (notably: stripping echoed user-question content
+        from the system field, observed with llama-3.1-8b on Cloudflare).
         """
+        samples: List[Dict[str, Any]] = []
         try:
-            # Try direct JSON parse
-            samples = json.loads(response)
-
-            if isinstance(samples, list):
-                return samples
-            elif isinstance(samples, dict) and "samples" in samples:
-                return samples["samples"]
+            parsed = json.loads(response)
+            if isinstance(parsed, list):
+                samples = parsed
+            elif isinstance(parsed, dict) and "samples" in parsed:
+                samples = parsed["samples"]
             else:
-                logger.error(f"Unexpected response format: {type(samples)}")
+                logger.error(f"Unexpected response format: {type(parsed)}")
+        except json.JSONDecodeError:
+            for fence in ("```json", "```"):
+                if fence in response:
+                    try:
+                        json_str = response.split(fence)[1].split("```")[0].strip()
+                        parsed = json.loads(json_str)
+                        if isinstance(parsed, list):
+                            samples = parsed
+                            break
+                    except Exception as e:
+                        logger.error(f"Error parsing {fence} JSON: {e}")
+            if not samples:
+                logger.error(f"Could not parse JSON from response: {response[:200]}")
                 return []
 
-        except json.JSONDecodeError:
-            # Try to extract JSON from markdown code blocks
-            if "```json" in response:
-                try:
-                    json_str = response.split("```json")[1].split("```")[0].strip()
-                    samples = json.loads(json_str)
-                    return samples if isinstance(samples, list) else []
-                except Exception as e:
-                    logger.error(f"Error parsing markdown JSON: {e}")
+        if self.format_type == "messages":
+            samples = [self._normalize_messages_sample(s) for s in samples]
+        return samples
 
-            elif "```" in response:
-                try:
-                    json_str = response.split("```")[1].split("```")[0].strip()
-                    samples = json.loads(json_str)
-                    return samples if isinstance(samples, list) else []
-                except Exception as e:
-                    logger.error(f"Error parsing code block JSON: {e}")
+    @staticmethod
+    def _normalize_messages_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
+        """Clean structural quirks in a `messages` SFT sample.
 
-            logger.error(f"Could not parse JSON from response: {response[:200]}")
-            return []
+        Observed in tonight's run with `cf/@cf/meta/llama-3.1-8b-instruct`:
+        the model appends the user's question verbatim to the system field,
+        producing `system = "<persona>. <user_question>"`. Pydantic accepts
+        the shape, so the leak ends up in training data unless we strip it
+        here. We only strip when the trailing match is long enough (>=20
+        chars) to avoid false positives on coincidental substrings.
+        """
+        msgs = sample.get("messages")
+        if not isinstance(msgs, list) or len(msgs) < 2:
+            return sample
+
+        system = next((m for m in msgs if m.get("role") == "system"), None)
+        user = next((m for m in msgs if m.get("role") == "user"), None)
+        if not (system and user):
+            return sample
+
+        sys_content = (system.get("content") or "").rstrip()
+        usr_content = (user.get("content") or "").strip()
+        if len(usr_content) >= 20 and sys_content.endswith(usr_content):
+            trimmed = sys_content[: -len(usr_content)].rstrip(" \t\n.,;:!?-")
+            if trimmed:
+                system["content"] = trimmed
+                logger.debug("Stripped echoed user content from system field")
+        return sample
 
     def _validate_sample(self, sample: Dict[str, Any]) -> bool:
         """

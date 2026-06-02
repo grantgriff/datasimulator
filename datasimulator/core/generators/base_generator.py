@@ -73,6 +73,12 @@ class BaseGenerator(ABC):
         self.total_regenerations = 0
         self.retry_count = 0
 
+        # Lazy-init dedup state. Diversity check runs after quality
+        # threshold passes; samples too similar (cosine >= diversity_threshold)
+        # to any already-accepted sample get rejected as duplicates.
+        self._diversity_checker = None
+        self._accepted_comparable_texts: List[str] = []
+
     async def _emit(self, event: str, **payload) -> None:
         """
         Fire a progress event to the user-supplied callback, if any.
@@ -140,6 +146,46 @@ class BaseGenerator(ABC):
         """
         pass
 
+    # ----- Diversity / dedup -----
+
+    def _get_diversity_checker(self):
+        """Lazy-init the local DiversityChecker (sentence-transformers).
+
+        The pipeline used to ignore diversity entirely — the threshold was
+        plumbed through but never consulted by any filter. Now wired in
+        between the quality-threshold check and sample acceptance.
+        """
+        if self._diversity_checker is None:
+            from ...quality.diversity_checker import DiversityChecker
+            self._diversity_checker = DiversityChecker(
+                similarity_threshold=self.config.diversity_threshold,
+                use_local=True,
+            )
+        return self._diversity_checker
+
+    def _get_comparable_text(self, sample: Dict[str, Any]) -> str:
+        """Extract the text used for sample-to-sample similarity comparison.
+
+        Default implementation: concatenate every string value in the sample
+        (recursing into lists/dicts) and return the joined text. Works for
+        any data shape; subclasses can override if they want a tighter
+        signal (e.g. SFT comparing user+assistant only).
+        """
+        parts: List[str] = []
+
+        def walk(v):
+            if isinstance(v, str):
+                parts.append(v)
+            elif isinstance(v, dict):
+                for vv in v.values():
+                    walk(vv)
+            elif isinstance(v, list):
+                for vv in v:
+                    walk(vv)
+
+        walk(sample)
+        return "\n".join(parts).strip()
+
     async def _score_quality(self, sample: Dict[str, Any]) -> float:
         """
         Score sample quality from 1-10.
@@ -157,12 +203,21 @@ class BaseGenerator(ABC):
             Quality score from 1.0 to 10.0
         """
         scoring_prompt = f"""
-Score this training data sample from 1-10 based on:
-1. Relevance to source material (if provided)
-2. Accuracy and correctness
-3. Clarity and completeness
-4. Instruction-following quality
-5. Appropriate difficulty level
+You are a STRICT quality assessor for ML training data. Score this
+sample from 1-10 using these anchors (default to skepticism):
+
+  1-3  FAIL: errors, off-topic, plagiarized, or no training signal.
+        Specifically score ≤3 if the response contains a FACTUAL ERROR,
+        or if it RESTATES THE QUESTION without adding information.
+  4-5  WEAK: valid but adds nothing the source doesn't already say —
+        DEFAULT here unless you can name a specific strength
+  6    PASSING: basic understanding, adds at least one useful detail
+  7-8  GOOD: clearly above median, depth/specificity beyond paraphrase
+  9    VERY GOOD: exemplary on multiple dimensions; rare
+  10   PERFECT: top-tier training example; very rare (<5%)
+
+Dimensions: relevance to source, factual accuracy, clarity, useful
+depth beyond source, instruction-following, difficulty calibration.
 
 Source Context:
 {self.source_content[:1000] if self.source_content else "No source context provided"}
@@ -172,8 +227,9 @@ Data Type: {self.data_type_name.upper()}
 Sample:
 {json.dumps(sample, indent=2)}
 
-Provide ONLY a single number from 1-10 (can use decimals like 7.5).
-No explanation needed, just the number.
+Provide ONLY a single number from 1-10 (decimals like 5.5 are fine).
+No explanation, just the number. Default to 5 unless a specific
+strength justifies higher.
 """
 
         try:
@@ -212,18 +268,53 @@ No explanation needed, just the number.
             return []
 
         # Create batched scoring prompt
+        n = len(samples)
         samples_text = "\n\n".join([
             f"=== SAMPLE {i+1} ===\n{json.dumps(sample, indent=2)}"
             for i, sample in enumerate(samples)
         ])
 
+        # IMPORTANT: do NOT include "..." in any example. Models mimic the
+        # example pattern verbatim — a literal "..." in the example
+        # teaches them to truncate the output. This was the root cause of
+        # "Batch scoring returned 5 scores for 10 samples" in earlier runs.
+        # The example below uses a concrete N=3 case to anchor the format
+        # without inviting truncation. The example scores deliberately
+        # include a fail (3.5), a pass-but-weak (5.5), and a strong (8.0)
+        # so the verifier sees the expected full range.
         scoring_prompt = f"""
-Score each of the following {len(samples)} training data samples from 1-10 based on:
-1. Relevance to source material
-2. Accuracy and correctness
-3. Clarity and completeness
-4. Instruction-following quality
-5. Appropriate difficulty level
+You are a STRICT quality assessor for ML training data. Default to
+skepticism — most training data in the wild is mediocre, and your
+scores should reflect that. Generous scoring lets bad samples into
+training sets.
+
+Score each of the {n} samples below from 1-10 on a STRICT rubric:
+
+  1-3  FAIL: factual errors, off-topic, unparsable, plagiarized verbatim
+        from the source, or so short/generic it provides no training
+        signal. Use freely for anything that shouldn't ship.
+        SPECIFIC FAILURE MODES — score ≤3 if any apply:
+          • Response contains a FACTUAL ERROR (wrong claim, wrong number,
+            wrong rule, misattribution).
+          • Response RESTATES THE QUESTION without adding information
+            (e.g., echoes the prompt's premise back as the answer).
+  4-5  WEAK: technically valid but adds nothing the source doesn't
+        already contain. Generic phrasing. Could be replaced by N
+        similar samples with no loss. THIS IS THE DEFAULT for
+        unremarkable samples — only go higher with specific evidence.
+  6    PASSING: shows basic understanding, no clear flaws, adds at
+        least ONE specific detail or framing useful for training.
+  7-8  GOOD: clearly above median. Demonstrates depth, specificity, or
+        pedagogical structure beyond a paraphrase of the source. Earn
+        each point above 6 with a concrete reason.
+  9    VERY GOOD: exemplary on multiple dimensions; hard to improve.
+        Rare.
+  10   PERFECT: would headline a published training set. Should be very
+        rare — fewer than 1 in 20 samples in a typical batch.
+
+Dimensions to weigh: relevance to source, factual accuracy, clarity,
+useful depth beyond source, instruction-following, difficulty
+calibration.
 
 Source Context:
 {self.source_content[:1000] if self.source_content else "No source context provided"}
@@ -233,17 +324,37 @@ Data Type: {self.data_type_name.upper()}
 SAMPLES TO SCORE:
 {samples_text}
 
-Provide ONLY the scores as a JSON array of numbers, nothing else.
-Example: [7.5, 8.2, 6.3, 9.0, ...]
+CRITICAL CALIBRATION RULES — read before scoring:
+- DEFAULT to 5 unless you can name a specific reason to go higher.
+- Aim for a realistic spread: most samples land 4-7. A typical batch
+  has 1-2 samples below 6 (filterable) and 1-2 samples at 8+.
+- Do not score generously out of politeness. Mediocre samples get 5.
+  Generic restatements of the source get 4.
+- For each sample, silently identify ONE specific weakness OR strength
+  before assigning. If you cannot name a strength, score ≤6.
 
-Output (JSON array only):
+CRITICAL OUTPUT RULES:
+- Output a JSON array of EXACTLY {n} numbers — one score per sample,
+  in order.
+- No commentary, no markdown, no trailing comments or ellipses.
+- Decimals are OK (e.g. 5.5, 7.2).
+- If you are about to output fewer than {n} numbers, STOP and produce
+  all {n}.
+
+Example for a hypothetical 3-sample batch (yours has {n}) — note the
+range across fail / weak-pass / strong:
+[3.5, 5.5, 8.0]
+
+Now output your JSON array of EXACTLY {n} scores:
 """
 
         try:
             response = await self.model_router.verify(
                 scoring_prompt,
                 temperature=0.3,
-                max_tokens=500
+                # Per CLAUDE.md: never use a low cap. 128K is the project
+                # default for any structured/batch response.
+                max_tokens=128000
             )
 
             # Extract JSON array
@@ -256,10 +367,22 @@ Output (JSON array only):
             scores = json.loads(response_clean)
 
             # Validate and clamp scores
-            if not isinstance(scores, list) or len(scores) != len(samples):
-                logger.warning(f"Batch scoring returned {len(scores)} scores for {len(samples)} samples")
-                # Fall back to default scores
-                return [5.0] * len(samples)
+            if not isinstance(scores, list) or len(scores) != n:
+                # On length mismatch: keep the partial scores we got and
+                # individually score the rest. Never silently assign 5.0
+                # to everything — that masks real quality and (combined
+                # with a quality_threshold) drops the whole batch.
+                got = len(scores) if isinstance(scores, list) else 0
+                logger.warning(
+                    f"Batch scoring returned {got} scores for {n} samples — "
+                    f"individually scoring the remaining {n - got}"
+                )
+                partial = []
+                if isinstance(scores, list):
+                    partial = [max(1.0, min(10.0, float(s))) for s in scores[:n]]
+                missing_samples = samples[len(partial):]
+                tail = [await self._score_quality(s) for s in missing_samples]
+                return partial + tail
 
             # Clamp each score to 1-10 range
             scores = [max(1.0, min(10.0, float(s))) for s in scores]
@@ -421,6 +544,24 @@ Output (JSON array only):
                         })
                         continue
 
+                    # Diversity / dedup check: cosine sim against already-accepted
+                    # samples must be below diversity_threshold (default 0.85).
+                    sample_text = self._get_comparable_text(raw_sample)
+                    is_diverse, max_sim = self._get_diversity_checker().is_diverse(
+                        sample_text, self._accepted_comparable_texts,
+                    )
+                    if not is_diverse:
+                        logger.info(
+                            f"Sample rejected as duplicate: similarity={max_sim:.3f} "
+                            f">= {self.config.diversity_threshold}"
+                        )
+                        self.failed_samples.append({
+                            "sample": raw_sample,
+                            "reason": "low_diversity",
+                            "similarity": max_sim,
+                        })
+                        continue
+
                     # Create dataset sample with metrics
                     try:
                         validated_data = self.data_format(**raw_sample)
@@ -443,8 +584,12 @@ Output (JSON array only):
                     except Exception as e:
                         logger.error(f"Error creating dataset sample: {e}")
 
-                # Add successful samples
+                # Add successful samples + register their text for future
+                # dedup comparison
                 self.generated_samples.extend(batch_samples)
+                for ds in batch_samples:
+                    raw = ds.data.model_dump() if hasattr(ds.data, "model_dump") else dict(ds.data)
+                    self._accepted_comparable_texts.append(self._get_comparable_text(raw))
                 samples_generated += len(batch_samples)
 
                 if show_progress:
@@ -622,6 +767,23 @@ Output (JSON array only):
                     })
                     continue
 
+                # Diversity / dedup check against already-accepted samples
+                sample_text = self._get_comparable_text(raw_sample)
+                is_diverse, max_sim = self._get_diversity_checker().is_diverse(
+                    sample_text, self._accepted_comparable_texts,
+                )
+                if not is_diverse:
+                    logger.info(
+                        f"Sample rejected as duplicate: similarity={max_sim:.3f} "
+                        f">= {self.config.diversity_threshold}"
+                    )
+                    self.failed_samples.append({
+                        "sample": raw_sample,
+                        "reason": "low_diversity",
+                        "similarity": max_sim,
+                    })
+                    continue
+
                 try:
                     validated_data = self.data_format(**raw_sample)
                     metrics = QualityMetrics(
@@ -630,9 +792,13 @@ Output (JSON array only):
                         generation_cost=last_cost / len(raw_samples) if len(raw_samples) > 0 else 0,
                         model_used=self.model_router.generator.model,
                         generation_time=generation_time / len(raw_samples) if len(raw_samples) > 0 else 0,
-                        regeneration_count=0
+                        regeneration_count=0,
+                        topic=topic,
+                        subtopic=subtopic,
                     )
                     batch_samples.append(DatasetSample(data=validated_data, metrics=metrics))
+                    # Register accepted sample for future dedup comparison
+                    self._accepted_comparable_texts.append(sample_text)
                 except Exception as e:
                     logger.error(f"Error creating dataset sample: {e}")
                     continue
@@ -708,6 +874,20 @@ Output (JSON array only):
                             })
                             continue
 
+                        # Diversity check on regenerated samples too
+                        sample_text = self._get_comparable_text(raw_sample)
+                        is_diverse, max_sim = self._get_diversity_checker().is_diverse(
+                            sample_text, self._accepted_comparable_texts,
+                        )
+                        if not is_diverse:
+                            self.failed_samples.append({
+                                "sample": raw_sample,
+                                "reason": "low_diversity",
+                                "similarity": max_sim,
+                                "regeneration_attempt": regeneration_attempt,
+                            })
+                            continue
+
                         try:
                             validated_data = self.data_format(**raw_sample)
                             metrics = QualityMetrics(
@@ -716,9 +896,12 @@ Output (JSON array only):
                                 generation_cost=regen_cost / len(regen_raw_samples) if len(regen_raw_samples) > 0 else 0,
                                 model_used=self.model_router.generator.model,
                                 generation_time=regen_generation_time / len(regen_raw_samples) if len(regen_raw_samples) > 0 else 0,
-                                regeneration_count=regeneration_attempt
+                                regeneration_count=regeneration_attempt,
+                                topic=topic,
+                                subtopic=subtopic,
                             )
                             batch_samples.append(DatasetSample(data=validated_data, metrics=metrics))
+                            self._accepted_comparable_texts.append(sample_text)
                             regen_passed += 1
                         except Exception as e:
                             logger.error(f"Error creating regenerated dataset sample: {e}")
@@ -862,6 +1045,68 @@ Output (JSON array only):
 
             if show_progress and len(batch_group) > 1:
                 print(f"   ✓ Completed parallel group (total: {samples_generated}/{num_samples})")
+
+        # ---- Top-up loop ----
+        # The planned batches above may undershoot num_samples when samples
+        # get filtered post-generation (low quality, low diversity, Pydantic
+        # validation, etc.) and the within-batch regen budget runs out. Keep
+        # generating extra batches — cycling through the planner's specs in
+        # round-robin so topic coverage stays balanced — until we hit
+        # num_samples or the cost cap. Bounded by max_topup_rounds as a
+        # safety net against pathological all-reject loops.
+        max_topup_rounds = max(num_samples, 50)
+        topup_round = 0
+        while samples_generated < num_samples and topup_round < max_topup_rounds:
+            if not self.cost_tracker.can_continue():
+                logger.warning("Cost limit reached during top-up; stopping")
+                await self._emit(
+                    "cost_limit_reached",
+                    total_cost=self.cost_tracker.total_cost,
+                    max_cost=self.config.max_cost,
+                    samples_generated=samples_generated,
+                    samples_target=num_samples,
+                )
+                break
+
+            remaining = num_samples - samples_generated
+            batch_spec = batches[topup_round % len(batches)]
+            topup_round += 1
+
+            if show_progress:
+                print(
+                    f"\n🔁 Top-up round {topup_round}: need {remaining} more sample(s) "
+                    f"(cycling through plan, on batch '{batch_spec.get('topic','')}')"
+                )
+
+            result = await self._process_single_batch(
+                batch_spec,
+                generation_plan,
+                remaining,
+                show_progress,
+            )
+            if result:
+                self.generated_samples.extend(result)
+                samples_generated += len(result)
+                await self._emit(
+                    "batch_completed",
+                    samples_in_batch=len(result),
+                    samples_passed=len(result),
+                    batch_cost=sum(s.metrics.generation_cost for s in result),
+                    average_quality=(
+                        sum(s.metrics.quality_score for s in result) / len(result)
+                        if result else 0.0
+                    ),
+                    samples_generated=samples_generated,
+                    samples_target=num_samples,
+                    total_cost=self.cost_tracker.total_cost,
+                    topup_round=topup_round,
+                )
+
+        if samples_generated < num_samples:
+            logger.warning(
+                f"Stopped short at {samples_generated}/{num_samples} after "
+                f"{topup_round} top-up rounds (cost cap or safety bound)"
+            )
 
         # Final checkpoint
         if checkpoint_dir and samples_generated > 0:
