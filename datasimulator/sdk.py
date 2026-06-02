@@ -260,7 +260,7 @@ class DataSimulator:
         interactive: bool = False,
         checkpoint_dir: Optional[str] = None,
         checkpoint_interval: int = 20,
-        enable_planning: bool = False,
+        enable_planning: bool = True,
         ranked_config: Optional[Dict[str, Any]] = None,
         google_api_key: Optional[str] = None,
         anthropic_api_key: Optional[str] = None,
