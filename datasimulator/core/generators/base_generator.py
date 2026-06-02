@@ -1046,6 +1046,68 @@ Now output your JSON array of EXACTLY {n} scores:
             if show_progress and len(batch_group) > 1:
                 print(f"   ✓ Completed parallel group (total: {samples_generated}/{num_samples})")
 
+        # ---- Top-up loop ----
+        # The planned batches above may undershoot num_samples when samples
+        # get filtered post-generation (low quality, low diversity, Pydantic
+        # validation, etc.) and the within-batch regen budget runs out. Keep
+        # generating extra batches — cycling through the planner's specs in
+        # round-robin so topic coverage stays balanced — until we hit
+        # num_samples or the cost cap. Bounded by max_topup_rounds as a
+        # safety net against pathological all-reject loops.
+        max_topup_rounds = max(num_samples, 50)
+        topup_round = 0
+        while samples_generated < num_samples and topup_round < max_topup_rounds:
+            if not self.cost_tracker.can_continue():
+                logger.warning("Cost limit reached during top-up; stopping")
+                await self._emit(
+                    "cost_limit_reached",
+                    total_cost=self.cost_tracker.total_cost,
+                    max_cost=self.config.max_cost,
+                    samples_generated=samples_generated,
+                    samples_target=num_samples,
+                )
+                break
+
+            remaining = num_samples - samples_generated
+            batch_spec = batches[topup_round % len(batches)]
+            topup_round += 1
+
+            if show_progress:
+                print(
+                    f"\n🔁 Top-up round {topup_round}: need {remaining} more sample(s) "
+                    f"(cycling through plan, on batch '{batch_spec.get('topic','')}')"
+                )
+
+            result = await self._process_single_batch(
+                batch_spec,
+                generation_plan,
+                remaining,
+                show_progress,
+            )
+            if result:
+                self.generated_samples.extend(result)
+                samples_generated += len(result)
+                await self._emit(
+                    "batch_completed",
+                    samples_in_batch=len(result),
+                    samples_passed=len(result),
+                    batch_cost=sum(s.metrics.generation_cost for s in result),
+                    average_quality=(
+                        sum(s.metrics.quality_score for s in result) / len(result)
+                        if result else 0.0
+                    ),
+                    samples_generated=samples_generated,
+                    samples_target=num_samples,
+                    total_cost=self.cost_tracker.total_cost,
+                    topup_round=topup_round,
+                )
+
+        if samples_generated < num_samples:
+            logger.warning(
+                f"Stopped short at {samples_generated}/{num_samples} after "
+                f"{topup_round} top-up rounds (cost cap or safety bound)"
+            )
+
         # Final checkpoint
         if checkpoint_dir and samples_generated > 0:
             self._save_checkpoint(checkpoint_dir, samples_generated, show_progress, final=True)
