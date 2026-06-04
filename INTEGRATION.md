@@ -55,7 +55,7 @@ that way for any CLI/server use.
 
 | Parameter | Type | Default | Purpose |
 |---|---|---|---|
-| `models` | `Dict[str, str]` | OpenAI everywhere | Override any role: `generator`, `verifier`, `diversity`, `planner`. |
+| `models` | `Dict[str, str]` | Gemini Flash via OpenRouter (Pro for planner) | Override any role: `generator`, `verifier`, `diversity`, `planner`. See "Default models" below. |
 | `batch_size` | `int` | `20` | Records per generation call. Lower = finer cost control. |
 | `parallel_batches` | `int` | `4` | Concurrent batches. Lower if you hit rate limits. |
 | `checkpoint_dir` | `str` | `None` | Auto-save partial output every N records. Set this for long runs. |
@@ -70,6 +70,21 @@ that way for any CLI/server use.
 | `cloudflare_account_id` | `str` | reads `CLOUDFLARE_ACCOUNT_ID` | Required with `cf/...`. CF's endpoint URL embeds the account ID. |
 | `do_api_key` | `str` | reads `DO_INFERENCE_KEY` | Activates the `do/...` model prefix for DigitalOcean Serverless Inference. |
 | `progress_callback` | `Callable[[dict], None \| Awaitable[None]]` | `None` | Structured progress events for your UI. See "Progress callbacks" below. |
+
+### Default models
+
+If you don't pass `models=`, the SDK uses Gemini through OpenRouter:
+
+| Role | Default | Why |
+|---|---|---|
+| `generator` | `openrouter/google/gemini-flash-latest` | Cheap, fast, strong instruction-following for SFT/DPO output. |
+| `verifier` | `openrouter/google/gemini-flash-latest` | Same model batches well for the batch quality scorer. |
+| `diversity` | `openrouter/google/gemini-flash-latest` | Used for prompt embedding/similarity checks. |
+| `planner` | `openrouter/google/gemini-pro-latest` | Reads source material end-to-end; benefits from long context + stronger reasoning. Only invoked when `enable_planning=True`. |
+
+Set `OPENROUTER_API_KEY` and you're done. Override any role via the
+`models=` dict if you want to mix providers or pin specific versions
+(e.g. `{"generator": "openrouter/openai/gpt-5.4-mini"}`).
 
 ### Provider routing
 

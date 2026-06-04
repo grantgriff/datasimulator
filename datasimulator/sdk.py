@@ -347,9 +347,12 @@ class DataSimulator:
 
         # Setup models
         model_config = models or {}
-        generator_model = model_config.get("generator", "gpt-5.4-mini")
-        verifier_model = model_config.get("verifier", "gpt-4.1-nano")
-        diversity_model = model_config.get("diversity", "gpt-4.1-nano")
+        # Default to Gemini via OpenRouter: Flash for generation/verification/
+        # diversity (cheap + fast), Pro for the planner (better long-context
+        # reasoning over the source material). Override via the `models=` dict.
+        generator_model = model_config.get("generator", "openrouter/google/gemini-flash-latest")
+        verifier_model = model_config.get("verifier", "openrouter/google/gemini-flash-latest")
+        diversity_model = model_config.get("diversity", "openrouter/google/gemini-flash-latest")
 
         self.model_router = ModelRouter(
             generator_model=generator_model,
@@ -375,7 +378,7 @@ class DataSimulator:
         if enable_planning:
             try:
                 from .planning import GeminiPlanner
-                planner_model = model_config.get("planner", "gpt-5.4")
+                planner_model = model_config.get("planner", "openrouter/google/gemini-pro-latest")
                 self.planner = GeminiPlanner(
                     model=planner_model,
                     anthropic_api_key=anthropic_api_key,
