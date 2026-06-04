@@ -773,9 +773,9 @@ class ModelRouter:
 
     def __init__(
         self,
-        generator_model: str = "gpt-5.4-mini",
-        verifier_model: str = "gpt-4.1-nano",
-        diversity_model: str = "gpt-4.1-nano",
+        generator_model: str = "openrouter/google/gemini-flash-latest",
+        verifier_model: str = "openrouter/google/gemini-flash-latest",
+        diversity_model: str = "openrouter/google/gemini-flash-latest",
         **api_keys
     ):
         # api_keys may include: anthropic_api_key, openai_api_key,
