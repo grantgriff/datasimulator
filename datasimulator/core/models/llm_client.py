@@ -773,9 +773,9 @@ class ModelRouter:
 
     def __init__(
         self,
-        generator_model: str = "openrouter/google/gemini-flash-latest",
-        verifier_model: str = "openrouter/google/gemini-flash-latest",
-        diversity_model: str = "openrouter/google/gemini-flash-latest",
+        generator_model: str = "openrouter/google/gemini-3.5-flash",
+        verifier_model: str = "openrouter/google/gemini-3.5-flash",
+        diversity_model: str = "openrouter/google/gemini-3.5-flash",
         **api_keys
     ):
         # api_keys may include: anthropic_api_key, openai_api_key,

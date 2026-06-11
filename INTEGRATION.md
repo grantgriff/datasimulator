@@ -77,10 +77,10 @@ If you don't pass `models=`, the SDK uses Gemini through OpenRouter:
 
 | Role | Default | Why |
 |---|---|---|
-| `generator` | `openrouter/google/gemini-flash-latest` | Cheap, fast, strong instruction-following for SFT/DPO output. |
-| `verifier` | `openrouter/google/gemini-flash-latest` | Same model batches well for the batch quality scorer. |
-| `diversity` | `openrouter/google/gemini-flash-latest` | Used for prompt embedding/similarity checks. |
-| `planner` | `openrouter/google/gemini-pro-latest` | Reads source material end-to-end; benefits from long context + stronger reasoning. Only invoked when `enable_planning=True`. |
+| `generator` | `openrouter/google/gemini-3.5-flash` | Cheap, fast, strong instruction-following for SFT/DPO output. |
+| `verifier` | `openrouter/google/gemini-3.5-flash` | Same model batches well for the batch quality scorer. |
+| `diversity` | `openrouter/google/gemini-3.5-flash` | Used for prompt embedding/similarity checks. |
+| `planner` | `openrouter/google/gemini-2.5-pro` | Reads source material end-to-end; benefits from long context + stronger reasoning. Only invoked when `enable_planning=True`. |
 
 Set `OPENROUTER_API_KEY` and you're done. Override any role via the
 `models=` dict if you want to mix providers or pin specific versions

@@ -347,12 +347,15 @@ class DataSimulator:
 
         # Setup models
         model_config = models or {}
-        # Default to Gemini via OpenRouter: Flash for generation/verification/
-        # diversity (cheap + fast), Pro for the planner (better long-context
-        # reasoning over the source material). Override via the `models=` dict.
-        generator_model = model_config.get("generator", "openrouter/google/gemini-flash-latest")
-        verifier_model = model_config.get("verifier", "openrouter/google/gemini-flash-latest")
-        diversity_model = model_config.get("diversity", "openrouter/google/gemini-flash-latest")
+        # Default to Gemini via OpenRouter: 3.5 Flash for generation/
+        # verification/diversity (cheap + fast), 2.5 Pro for the planner
+        # (better long-context reasoning over the source material). Pinned to
+        # concrete versions rather than the `-latest` moving aliases so the
+        # underlying model — and its structured-output behaviour — can't shift
+        # without a code change. Override via the `models=` dict.
+        generator_model = model_config.get("generator", "openrouter/google/gemini-3.5-flash")
+        verifier_model = model_config.get("verifier", "openrouter/google/gemini-3.5-flash")
+        diversity_model = model_config.get("diversity", "openrouter/google/gemini-3.5-flash")
 
         self.model_router = ModelRouter(
             generator_model=generator_model,
@@ -378,7 +381,7 @@ class DataSimulator:
         if enable_planning:
             try:
                 from .planning import GeminiPlanner
-                planner_model = model_config.get("planner", "openrouter/google/gemini-pro-latest")
+                planner_model = model_config.get("planner", "openrouter/google/gemini-2.5-pro")
                 self.planner = GeminiPlanner(
                     model=planner_model,
                     anthropic_api_key=anthropic_api_key,

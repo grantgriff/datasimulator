@@ -28,7 +28,7 @@ class GeminiPlanner:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "openrouter/google/gemini-pro-latest",
+        model: str = "openrouter/google/gemini-2.5-pro",
         chunk_overlap: float = 0.1,
         anthropic_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
@@ -53,7 +53,7 @@ class GeminiPlanner:
             api_key: Convenience param — auto-routes to the matching provider
                 key slot based on the model prefix. Pass `openai_api_key=` etc.
                 explicitly if you need finer control.
-            model: Model name (default: openrouter/google/gemini-pro-latest).
+            model: Model name (default: openrouter/google/gemini-2.5-pro).
             chunk_overlap: Fraction of chunk to overlap with next (0.0-0.5).
             cloudflare_account_id: Required when model uses the `cf/` prefix.
                 Falls back to CLOUDFLARE_ACCOUNT_ID env var.
