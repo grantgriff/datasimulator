@@ -206,6 +206,11 @@ Your questions should include specific dollar amounts, percentages, or calculati
 6. Generate EXACTLY {batch_size} samples about "{topic} → {subtopic}"
 
 7. Difficulty: {batch_size//3} basic, {batch_size//3} intermediate, {batch_size//3} advanced
+{self._anti_duplication_block(batch_size)}
+NOTE for verifiable QA: the "no factual error" rule applies to the
+ground_truth — every ground_truth must be correct. The "no restating
+the question" rule applies to the prompt — questions that don't have
+a real answer beyond the premise should not be generated.
 
 Return JSON array: [{{"prompt": "...", "ground_truth": "...", "verification_type": "{self.verification_type}"}}, ...]
 ONLY JSON, no other text.
@@ -236,6 +241,10 @@ Generate {batch_size} verifiable training examples.
 {self.source_content[:2000] if self.source_content else "Generate verifiable examples in the specified domain."}
 
 Return a JSON array of {batch_size} examples.
+{self._anti_duplication_block(batch_size)}
+NOTE for verifiable QA: the "no factual error" rule applies to the
+ground_truth — every ground_truth must be correct.
+
 Return ONLY the JSON array, no other text.
 """
         return prompt

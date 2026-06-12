@@ -224,6 +224,10 @@ EXAMPLE 3 (Rejection Type: Plausibly Wrong Reasoning - sounds logical but incorr
 7. Generate EXACTLY {batch_size} samples about "{topic} → {subtopic}"
 
 8. Difficulty: {batch_size//3} basic, {batch_size//3} intermediate, {batch_size//3} advanced
+{self._anti_duplication_block(batch_size)}
+NOTE for DPO: the anti-duplication and no-factual-error rules apply to
+the CHOSEN response. The REJECTED response is allowed to be weaker by
+design, but it should still be a plausible attempt, not gibberish.
 
 Return JSON array: [{{"prompt": "...", "chosen": "...", "rejected": "..."}}, ...]
 ONLY JSON, no other text.
@@ -258,6 +262,9 @@ Return a JSON array of {batch_size} preference pairs. Each must have this struct
   "chosen": "High-quality, preferred response",
   "rejected": "Lower-quality, less preferred response"
 }}
+{self._anti_duplication_block(batch_size)}
+NOTE for DPO: the anti-duplication and no-factual-error rules apply to the
+CHOSEN response. The REJECTED response is allowed to be weaker by design.
 
 Return ONLY the JSON array, no other text.
 """
@@ -323,6 +330,9 @@ SOURCE CONTENT:
 {strategy_instructions}
 
 5. Generate EXACTLY {batch_size} samples about "{topic} → {subtopic}"
+{self._anti_duplication_block(batch_size)}
+NOTE for DPO: the anti-duplication and no-factual-error rules apply to
+the CHOSEN response. The REJECTED response is allowed to be weaker by design.
 
 Return JSON array with the format shown above.
 ONLY JSON, no other text.
@@ -357,6 +367,9 @@ Return a JSON array of {batch_size} examples with this structure:
     {{"role": "assistant", "content": "Lower-quality response"}}
   ]
 }}
+{self._anti_duplication_block(batch_size)}
+NOTE for DPO: the anti-duplication and no-factual-error rules apply to the
+CHOSEN response. The REJECTED response is allowed to be weaker by design.
 
 Return ONLY the JSON array, no other text.
 """

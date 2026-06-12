@@ -182,6 +182,12 @@ The ORDER of responses in the array indicates your INTENDED quality (index 0 = b
 The verifier will score them independently and may reorder; do not include scores or rank labels in the text.
 
 Do NOT include ranks or quality scores in the response text itself — write each response as a natural, standalone answer.
+{self._anti_duplication_block(batch_size)}
+NOTE for ranked: the anti-duplication rule applies across the {batch_size}
+records in this batch (each record's prompt must be substantively
+different from the others). Within a single record, the rank 1 response
+must be factually correct; lower-rank responses are intentionally weaker
+per the spread instructions above.
 
 OUTPUT: JSON array of EXACTLY {batch_size} records. ONLY the JSON array, no other text.
 """

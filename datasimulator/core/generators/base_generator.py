@@ -146,6 +146,43 @@ class BaseGenerator(ABC):
         """
         pass
 
+    # ----- Generator prompt injection: diversity + factuality guard -----
+
+    @staticmethod
+    def _anti_duplication_block(n: int) -> str:
+        """Return a generator-prompt block that explicitly tells the model
+        to produce distinct, factually correct samples — and NOT to produce
+        near-duplicates, restatements of the question, or factual errors.
+
+        Used by every generator. Keeping the language in one place makes it
+        easy to tune (and means the generator side mirrors the failure
+        modes the verifier explicitly downgrades to <=3).
+        """
+        return f"""
+=== CRITICAL: DIVERSITY & FACTUAL CORRECTNESS ===
+
+The {n} samples in this batch MUST be UNIQUE AND DISTINCT from each other.
+Each sample should explore a genuinely different angle, scenario, calculation,
+edge case, or detail — not just rephrase the same idea with surface wording
+changes.
+
+ABSOLUTE FAILURES — do NOT produce any of the following:
+1. Two or more samples that share essentially the same scenario, numbers, or
+   framing with only minor wording differences. Each sample must be
+   substantively different from every other sample in this batch.
+2. Any sample whose response RESTATES THE QUESTION without adding new
+   information — the answer must contribute concrete facts, calculations,
+   or reasoning beyond what's already in the prompt.
+3. Any sample containing a FACTUAL ERROR — wrong numbers, wrong rules,
+   misattributed standards, fabricated citations, or claims that contradict
+   the source material.
+
+If you cannot produce {n} genuinely distinct, factually correct samples on
+this topic, produce FEWER rather than padding with near-duplicates or
+restatements. A short batch of strong samples is better than a full batch
+of weak ones — the downstream verifier will reject the weak ones anyway.
+"""
+
     # ----- Diversity / dedup -----
 
     def _get_diversity_checker(self):
@@ -295,9 +332,13 @@ Score each of the {n} samples below from 1-10 on a STRICT rubric:
         signal. Use freely for anything that shouldn't ship.
         SPECIFIC FAILURE MODES — score ≤3 if any apply:
           • Response contains a FACTUAL ERROR (wrong claim, wrong number,
-            wrong rule, misattribution).
+            wrong rule, misattribution, fabricated citation).
           • Response RESTATES THE QUESTION without adding information
             (e.g., echoes the prompt's premise back as the answer).
+          • Sample is a NEAR-DUPLICATE of another sample in this batch —
+            same scenario, same numbers, same framing with only surface
+            wording changes. Even a well-written near-duplicate is a fail
+            because it provides no additional training signal.
   4-5  WEAK: technically valid but adds nothing the source doesn't
         already contain. Generic phrasing. Could be replaced by N
         similar samples with no loss. THIS IS THE DEFAULT for

@@ -271,7 +271,7 @@ Example: A $10,000 computer system is tangible (5-year MACRS). A $10,000 softwar
 See IRS Publication 946 for tangible property."
 
    Your responses should match this level of detail with real calculations, examples, and references.
-
+{self._anti_duplication_block(batch_size)}
 OUTPUT: JSON array with EXACTLY {batch_size} objects in the format shown above.
 Provide ONLY the JSON array, no other text.
 """
@@ -307,7 +307,7 @@ Return a JSON array of {batch_size} examples. Each example must have this exact 
     {{"role": "assistant", "content": "..."}}
   ]
 }}
-
+{self._anti_duplication_block(batch_size)}
 Return ONLY the JSON array, no other text.
 """
         return prompt
@@ -429,7 +429,7 @@ Return a JSON array of {batch_size} examples. Each example must have this exact 
   "prompt": "Question: ... Answer:",
   "completion": "..."
 }}
-
+{self._anti_duplication_block(batch_size)}
 Return ONLY the JSON array, no other text.
 """
         return prompt
