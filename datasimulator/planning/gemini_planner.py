@@ -10,6 +10,8 @@ import logging
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
+from ..core.generators.base_generator import extract_json_block
+
 logger = logging.getLogger(__name__)
 
 
@@ -426,13 +428,10 @@ Provide ONLY the JSON output, nothing else.
             )
             plan_text = (response_text or "").strip()
 
-            # Extract JSON from response
-            if "```json" in plan_text:
-                plan_text = plan_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in plan_text:
-                plan_text = plan_text.split("```")[1].split("```")[0].strip()
-
-            plan = json.loads(plan_text)
+            # Extract JSON from response (robust to code fences / backticks)
+            plan = extract_json_block(plan_text)
+            if plan is None:
+                raise ValueError(f"no JSON plan found in response; raw={plan_text[:200]}")
 
             # Validate batch plan
             plan = self._validate_batch_plan(plan, total_samples, batch_size)

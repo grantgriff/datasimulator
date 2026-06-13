@@ -23,6 +23,74 @@ from ...utils.cost_tracker import CostTracker
 logger = logging.getLogger(__name__)
 
 
+def extract_json_block(text: str) -> Optional[Any]:
+    """Best-effort extraction of a single JSON value (array or object) from a
+    model response.
+
+    Robust to:
+      - Markdown code fences wrapping the JSON (```json ... ``` or ``` ... ```).
+      - Leading/trailing prose ("Here is the JSON:" ... "Hope this helps!").
+      - Stray backticks or brackets INSIDE string values — e.g. a generated
+        answer that itself contains a ```bash code block, or an inline
+        `path/`. The old `split("```")` approach sliced these mid-string and
+        produced a non-JSON fragment, so `json.loads` failed at char 0 and
+        whole batches were silently dropped. This scans with string-literal
+        awareness so anything inside a JSON string is treated as opaque.
+
+    Returns the parsed object/list, or None if no complete JSON value is found
+    (e.g. the response was truncated mid-structure).
+    """
+    if not text or not isinstance(text, str):
+        return None
+
+    s = text.strip()
+
+    # Fast path: the whole payload is already valid JSON.
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Otherwise locate the earliest-opening top-level structure (array or
+    # object) and bracket-match its end. Whichever of '['/'{' appears first
+    # is treated as the real top-level value, so an object isn't mistaken
+    # for one of its inner arrays (or vice-versa).
+    first_arr, first_obj = s.find("["), s.find("{")
+    candidates = [c for c in ((first_arr, "[", "]"), (first_obj, "{", "}")) if c[0] != -1]
+    if not candidates:
+        return None
+    start, open_ch, close_ch = min(candidates, key=lambda c: c[0])
+
+    # Bracket-match with string-literal awareness: anything inside a JSON
+    # string (including ``` fences, brackets, and escaped quotes) is opaque,
+    # so generated content can't throw off the match.
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(s)):
+        c = s[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == open_ch:
+            depth += 1
+        elif c == close_ch:
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(s[start:i + 1])
+                except (json.JSONDecodeError, ValueError):
+                    return None
+    return None  # never balanced (e.g. truncated mid-structure)
+
+
 class BaseGenerator(ABC):
     """
     Abstract base class for all training data generators.
@@ -398,14 +466,10 @@ Now output your JSON array of EXACTLY {n} scores:
                 max_tokens=128000
             )
 
-            # Extract JSON array
-            response_clean = response.strip()
-            if "```json" in response_clean:
-                response_clean = response_clean.split("```json")[1].split("```")[0].strip()
-            elif "```" in response_clean:
-                response_clean = response_clean.split("```")[1].split("```")[0].strip()
-
-            scores = json.loads(response_clean)
+            # Extract JSON array (robust to code fences / backticks in content)
+            scores = extract_json_block(response)
+            if scores is None:
+                raise json.JSONDecodeError("no JSON value found in response", response or "", 0)
 
             # Validate and clamp scores
             if not isinstance(scores, list) or len(scores) != n:

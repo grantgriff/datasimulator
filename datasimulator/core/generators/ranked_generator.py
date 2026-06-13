@@ -9,7 +9,7 @@ import json
 import logging
 from typing import List, Dict, Any, Type, Optional, Literal
 
-from .base_generator import BaseGenerator
+from .base_generator import BaseGenerator, extract_json_block
 from ..data_models import RankedSample, TrainingDataFormat
 
 logger = logging.getLogger(__name__)
@@ -351,16 +351,9 @@ Now output your JSON array of EXACTLY {n} scores:
             logger.error(f"Error scoring ranked responses: {e}")
             return []
 
-        cleaned = raw.strip()
-        if "```json" in cleaned:
-            cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-        elif "```" in cleaned:
-            cleaned = cleaned.split("```")[1].split("```")[0].strip()
-
-        try:
-            scores = json.loads(cleaned)
-        except Exception as e:
-            logger.error(f"Could not parse verifier scores: {e}; raw={raw[:200]}")
+        scores = extract_json_block(raw)
+        if scores is None:
+            logger.error(f"Could not parse verifier scores; raw={raw[:200]}")
             return []
 
         if not isinstance(scores, list) or len(scores) != len(responses):
@@ -383,17 +376,13 @@ Now output your JSON array of EXACTLY {n} scores:
         return gap < self.NARROW_MAX_GAP
 
     def _parse_batch_response(self, response: str) -> List[Dict[str, Any]]:
-        """Extract a JSON array of raw records from the model response."""
-        cleaned = response.strip()
-        if "```json" in cleaned:
-            cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-        elif "```" in cleaned:
-            cleaned = cleaned.split("```")[1].split("```")[0].strip()
+        """Extract a JSON array of raw records from the model response.
 
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError as e:
-            logger.error(f"Could not parse ranked batch JSON: {e}; raw={response[:200]}")
+        Robust to code fences / inline backticks in the generated answers
+        (common for CLI/code domains) — see extract_json_block."""
+        data = extract_json_block(response)
+        if data is None:
+            logger.error(f"Could not parse ranked batch JSON; raw={response[:200]}")
             return []
 
         if isinstance(data, list):

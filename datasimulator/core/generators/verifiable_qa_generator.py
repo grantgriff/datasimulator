@@ -10,7 +10,7 @@ import logging
 import re
 from typing import List, Dict, Any, Type, Literal, Optional
 
-from .base_generator import BaseGenerator
+from .base_generator import BaseGenerator, extract_json_block
 from ..data_models import RLVerifiable, TrainingDataFormat
 
 logger = logging.getLogger(__name__)
@@ -320,55 +320,24 @@ Return ONLY the JSON array, no other text.
             return ""
 
     def _parse_batch_response(self, response: str) -> List[Dict[str, Any]]:
-        """Parse JSON response from model."""
-        try:
-            # Try direct JSON parse
-            samples = json.loads(response)
+        """Parse JSON response from model (robust to code fences / backticks
+        inside generated content)."""
+        data = extract_json_block(response)
+        if isinstance(data, dict) and "samples" in data:
+            data = data["samples"]
 
-            if isinstance(samples, list):
-                # Ensure verification_type is set
-                for sample in samples:
-                    if "verification_type" not in sample:
-                        sample["verification_type"] = self.verification_type
-                return samples
-            elif isinstance(samples, dict) and "samples" in samples:
-                samples_list = samples["samples"]
-                for sample in samples_list:
-                    if "verification_type" not in sample:
-                        sample["verification_type"] = self.verification_type
-                return samples_list
+        if not isinstance(data, list):
+            if data is None:
+                logger.error("Could not parse JSON from response")
             else:
-                logger.error(f"Unexpected response format: {type(samples)}")
-                return []
-
-        except json.JSONDecodeError:
-            # Try to extract JSON from markdown
-            if "```json" in response:
-                try:
-                    json_str = response.split("```json")[1].split("```")[0].strip()
-                    samples = json.loads(json_str)
-                    if isinstance(samples, list):
-                        for sample in samples:
-                            if "verification_type" not in sample:
-                                sample["verification_type"] = self.verification_type
-                        return samples
-                except Exception as e:
-                    logger.error(f"Error parsing markdown JSON: {e}")
-
-            elif "```" in response:
-                try:
-                    json_str = response.split("```")[1].split("```")[0].strip()
-                    samples = json.loads(json_str)
-                    if isinstance(samples, list):
-                        for sample in samples:
-                            if "verification_type" not in sample:
-                                sample["verification_type"] = self.verification_type
-                        return samples
-                except Exception as e:
-                    logger.error(f"Error parsing code block JSON: {e}")
-
-            logger.error("Could not parse JSON from response")
+                logger.error(f"Unexpected response format: {type(data)}")
             return []
+
+        # Ensure verification_type is set on every sample.
+        for sample in data:
+            if isinstance(sample, dict) and "verification_type" not in sample:
+                sample["verification_type"] = self.verification_type
+        return data
 
     def _validate_sample(self, sample: Dict[str, Any]) -> bool:
         """Validate RL verifiable sample format."""

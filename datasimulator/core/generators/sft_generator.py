@@ -10,7 +10,7 @@ import json
 import logging
 from typing import List, Dict, Any, Type, Literal, Optional
 
-from .base_generator import BaseGenerator
+from .base_generator import BaseGenerator, extract_json_block
 from ..data_models import (
     SFTMessages,
     SFTCompletion,
@@ -456,28 +456,17 @@ Return ONLY the JSON array, no other text.
         from the system field, observed with llama-3.1-8b on Cloudflare).
         """
         samples: List[Dict[str, Any]] = []
-        try:
-            parsed = json.loads(response)
-            if isinstance(parsed, list):
-                samples = parsed
-            elif isinstance(parsed, dict) and "samples" in parsed:
-                samples = parsed["samples"]
-            else:
-                logger.error(f"Unexpected response format: {type(parsed)}")
-        except json.JSONDecodeError:
-            for fence in ("```json", "```"):
-                if fence in response:
-                    try:
-                        json_str = response.split(fence)[1].split("```")[0].strip()
-                        parsed = json.loads(json_str)
-                        if isinstance(parsed, list):
-                            samples = parsed
-                            break
-                    except Exception as e:
-                        logger.error(f"Error parsing {fence} JSON: {e}")
-            if not samples:
-                logger.error(f"Could not parse JSON from response: {response[:200]}")
-                return []
+        parsed = extract_json_block(response)
+        if isinstance(parsed, list):
+            samples = parsed
+        elif isinstance(parsed, dict) and "samples" in parsed:
+            samples = parsed["samples"]
+        elif parsed is None:
+            logger.error(f"Could not parse JSON from response: {response[:200]}")
+            return []
+        else:
+            logger.error(f"Unexpected response format: {type(parsed)}")
+            return []
 
         if self.format_type == "messages":
             samples = [self._normalize_messages_sample(s) for s in samples]

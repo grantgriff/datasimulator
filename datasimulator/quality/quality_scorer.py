@@ -14,6 +14,8 @@ import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
+from ..core.generators.base_generator import extract_json_block
+
 logger = logging.getLogger(__name__)
 
 
@@ -154,21 +156,12 @@ Score this training data sample on multiple dimensions.
 
     def _parse_scoring_response(self, response: str) -> Dict[str, float]:
         """Parse scoring response from LLM."""
-        try:
-            # Try direct JSON parse
-            data = json.loads(response)
-        except json.JSONDecodeError:
-            # Try extracting JSON from markdown
-            if "```json" in response:
-                json_str = response.split("```json")[1].split("```")[0].strip()
-                data = json.loads(json_str)
-            elif "```" in response:
-                json_str = response.split("```")[1].split("```")[0].strip()
-                data = json.loads(json_str)
-            else:
-                # Fallback: extract numbers from text
-                logger.warning("Could not parse JSON, using fallback")
-                return self._fallback_parse(response)
+        # Robust to code fences / backticks inside the response.
+        data = extract_json_block(response)
+        if not isinstance(data, dict):
+            # Fallback: extract numbers from text
+            logger.warning("Could not parse JSON, using fallback")
+            return self._fallback_parse(response)
 
         # Extract scores
         scores = {}

@@ -9,7 +9,7 @@ import json
 import logging
 from typing import List, Dict, Any, Type, Literal, Optional
 
-from .base_generator import BaseGenerator
+from .base_generator import BaseGenerator, extract_json_block
 from ..data_models import (
     DPOPreference,
     DPOMessages,
@@ -432,39 +432,18 @@ Return ONLY the JSON array, no other text.
             return ""
 
     def _parse_batch_response(self, response: str) -> List[Dict[str, Any]]:
-        """Parse JSON response from model."""
-        try:
-            # Try direct JSON parse
-            samples = json.loads(response)
-
-            if isinstance(samples, list):
-                return samples
-            elif isinstance(samples, dict) and "samples" in samples:
-                return samples["samples"]
-            else:
-                logger.error(f"Unexpected response format: {type(samples)}")
-                return []
-
-        except json.JSONDecodeError:
-            # Try to extract JSON from markdown code blocks
-            if "```json" in response:
-                try:
-                    json_str = response.split("```json")[1].split("```")[0].strip()
-                    samples = json.loads(json_str)
-                    return samples if isinstance(samples, list) else []
-                except Exception as e:
-                    logger.error(f"Error parsing markdown JSON: {e}")
-
-            elif "```" in response:
-                try:
-                    json_str = response.split("```")[1].split("```")[0].strip()
-                    samples = json.loads(json_str)
-                    return samples if isinstance(samples, list) else []
-                except Exception as e:
-                    logger.error(f"Error parsing code block JSON: {e}")
-
+        """Parse JSON response from model (robust to code fences / backticks
+        inside generated content)."""
+        samples = extract_json_block(response)
+        if isinstance(samples, list):
+            return samples
+        if isinstance(samples, dict) and "samples" in samples:
+            return samples["samples"]
+        if samples is None:
             logger.error(f"Could not parse JSON from response: {response[:200]}")
-            return []
+        else:
+            logger.error(f"Unexpected response format: {type(samples)}")
+        return []
 
     def _validate_sample(self, sample: Dict[str, Any]) -> bool:
         """Validate DPO sample format."""
