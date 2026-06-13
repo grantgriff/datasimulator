@@ -239,6 +239,7 @@ Each event is a flat `dict` whose `"event"` key tells you the type.
 |---|---|---|
 | `generation_started` | `num_samples`, `data_type`, `quality_threshold`, `max_cost`, `num_planned_batches` (or `None`), `domain` (or `None`) | Once, at the very start. |
 | `batch_completed` | `samples_in_batch`, `samples_passed`, `batch_cost`, `average_quality`, `samples_generated`, `samples_target`, `total_cost` | After each batch finishes (post-validation, post-quality-check). This is the event to drive a progress bar from. |
+| `sample_preview` | `data_type`, `prompt` (full), `response` (full), `response_preview` (response truncated to ~300 chars) | Right after each `batch_completed`, carrying ONE accepted sample so a UI can show real generated data live, not just counts. Render `response_preview` for a compact line; `response` holds the full text. |
 | `checkpoint_saved` | `samples_generated`, `checkpoint_dir` | After each checkpoint write (only if `checkpoint_dir` was set). |
 | `cost_limit_reached` | `total_cost`, `max_cost`, `samples_generated`, `samples_target` | When the cost cap halts the run early. |
 | `generation_completed` | `samples_generated`, `samples_target`, `failed`, `total_cost` | Once, at the very end (whether the run completed normally or stopped early). |

@@ -462,7 +462,7 @@ Return ONLY the JSON array, no other text.
         elif isinstance(parsed, dict) and "samples" in parsed:
             samples = parsed["samples"]
         elif parsed is None:
-            logger.error(f"Could not parse JSON from response: {response[:200]}")
+            logger.error(f"Could not parse JSON from response: {response[:2000]}")
             return []
         else:
             logger.error(f"Unexpected response format: {type(parsed)}")

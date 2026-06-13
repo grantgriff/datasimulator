@@ -353,7 +353,7 @@ Now output your JSON array of EXACTLY {n} scores:
 
         scores = extract_json_block(raw)
         if scores is None:
-            logger.error(f"Could not parse verifier scores; raw={raw[:200]}")
+            logger.error(f"Could not parse verifier scores; raw={raw[:2000]}")
             return []
 
         if not isinstance(scores, list) or len(scores) != len(responses):
@@ -382,7 +382,7 @@ Now output your JSON array of EXACTLY {n} scores:
         (common for CLI/code domains) — see extract_json_block."""
         data = extract_json_block(response)
         if data is None:
-            logger.error(f"Could not parse ranked batch JSON; raw={response[:200]}")
+            logger.error(f"Could not parse ranked batch JSON; raw={response[:2000]}")
             return []
 
         if isinstance(data, list):

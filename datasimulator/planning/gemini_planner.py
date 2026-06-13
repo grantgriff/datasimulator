@@ -431,7 +431,7 @@ Provide ONLY the JSON output, nothing else.
             # Extract JSON from response (robust to code fences / backticks)
             plan = extract_json_block(plan_text)
             if plan is None:
-                raise ValueError(f"no JSON plan found in response; raw={plan_text[:200]}")
+                raise ValueError(f"no JSON plan found in response; raw={plan_text[:2000]}")
 
             # Validate batch plan
             plan = self._validate_batch_plan(plan, total_samples, batch_size)

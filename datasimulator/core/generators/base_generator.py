@@ -166,6 +166,72 @@ class BaseGenerator(ABC):
         except Exception as e:
             logger.warning(f"progress_callback raised on event {event!r}: {e}")
 
+    @staticmethod
+    def _preview_fields(sample: Any) -> Dict[str, str]:
+        """Best-effort (prompt, response) extraction from any sample shape —
+        a raw dict or a DatasetSample / format model — for the live preview.
+        Mirrors the gold-extraction downstream tools (Posty) do."""
+        d = sample
+        inner = getattr(sample, "data", None)        # DatasetSample wrapper
+        if inner is not None:
+            d = inner
+        if hasattr(d, "model_dump"):                 # a pydantic format model
+            d = d.model_dump()
+        if not isinstance(d, dict):
+            return {"prompt": "", "response": ""}
+
+        ranked = d.get("ranked_responses") or []
+        if "messages" in d:
+            msgs = d.get("messages") or []
+            prompt = next((m.get("content", "") for m in msgs if m.get("role") == "user"), "")
+            response = next((m.get("content", "") for m in msgs if m.get("role") == "assistant"), "")
+        else:
+            prompt = d.get("prompt") or d.get("instruction") or ""
+            response = (
+                d.get("gold_answer")
+                or d.get("chosen")
+                or d.get("ground_truth")
+                or d.get("completion")
+                or (ranked[0].get("text", "") if ranked and isinstance(ranked[0], dict) else "")
+                or ""
+            )
+        return {"prompt": str(prompt), "response": str(response)}
+
+    async def _emit_sample_preview(
+        self,
+        batch_samples: List[Any],
+        show_progress: bool,
+        max_chars: int = 300,
+    ) -> None:
+        """Surface ONE accepted sample from the batch so the user can eyeball
+        quality live: emits a `sample_preview` progress event (carrying the
+        full prompt + response for downstream renderers) and, when
+        show_progress is on, prints a compact preview (full prompt; response
+        truncated to max_chars)."""
+        if not batch_samples:
+            return
+        fields = self._preview_fields(batch_samples[0])
+        prompt = fields["prompt"].strip()
+        response = fields["response"].strip()
+        if len(response) > max_chars:
+            resp_preview = response[:max_chars] + f"… (+{len(response) - max_chars} more chars)"
+        else:
+            resp_preview = response
+
+        await self._emit(
+            "sample_preview",
+            data_type=self.data_type_name,
+            prompt=prompt,
+            response=response,                # full content for event consumers
+            response_preview=resp_preview,
+        )
+
+        if show_progress:
+            # Indent under the batch's progress tree; keep it visually distinct.
+            print(f"   └─ sample preview ({self.data_type_name}):")
+            print(f"        prompt:   {prompt}")
+            print(f"        response: {resp_preview}")
+
     @property
     @abstractmethod
     def data_format(self) -> Type[TrainingDataFormat]:
@@ -723,6 +789,7 @@ Now output your JSON array of EXACTLY {n} scores:
                     samples_target=num_samples,
                     total_cost=self.cost_tracker.total_cost,
                 )
+                await self._emit_sample_preview(batch_samples, show_progress)
 
                 # Save checkpoint if needed
                 if checkpoint_dir and samples_generated % checkpoint_interval == 0:
@@ -1138,6 +1205,7 @@ Now output your JSON array of EXACTLY {n} scores:
                         samples_target=num_samples,
                         total_cost=self.cost_tracker.total_cost,
                     )
+                    await self._emit_sample_preview(result, show_progress)
 
                     # Checkpointing
                     if checkpoint_dir and samples_generated % checkpoint_interval == 0:
@@ -1206,6 +1274,7 @@ Now output your JSON array of EXACTLY {n} scores:
                     total_cost=self.cost_tracker.total_cost,
                     topup_round=topup_round,
                 )
+                await self._emit_sample_preview(result, show_progress)
 
         if samples_generated < num_samples:
             logger.warning(
