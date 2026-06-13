@@ -110,8 +110,16 @@ data_type = "full"  # one of the five strings above
 - Budget must be > 0. Warn if cost-per-sample estimate × samples > budget
   (the SDK will halt mid-run — annoying UX).
 
-**Rough cost estimates** at default models (gpt-5.4-mini generator,
-gpt-4.1-nano verifier, gpt-5.4 planner):
+**Current default models** (OpenRouter Gemini): `gemini-3.5-flash` for
+generator/verifier/diversity, `gemini-2.5-pro` for the planner. Pinned to
+concrete versions (not the `-latest` moving aliases) so behaviour can't
+shift without a code change. At these Flash defaults, expect very roughly
+~$0.0015/sample for SFT.
+
+**Rough cost estimates** (order-of-magnitude; the absolute figures below
+were calibrated on an earlier OpenAI default set — gpt-5.4-mini generator,
+gpt-4.1-nano verifier, gpt-5.4 planner — and are kept for relative
+comparison across data types):
 - SFT: ~$0.005/sample
 - DPO: ~$0.007/sample
 - ranked (3 responses): ~$0.008/sample
